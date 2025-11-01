@@ -167,6 +167,7 @@ export function MetricsChart({
                 tickMargin={6}
                 width={70}
                 tick={{ fontSize: 11 }}
+                domain={[0, 50000]}
                 tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
               />
               <ChartTooltip
@@ -224,9 +225,16 @@ export function MetricsChart({
                 type="monotone"
                 stroke={DEEPSEEK_BLUE}
                 strokeWidth={2}
-                dot={(props) => (
-                  <CustomDot {...props} dataLength={metricsData.length} />
-                )}
+                dot={(props) => {
+                  const { key, ...restProps } = props;
+                  return (
+                    <CustomDot
+                      key={key}
+                      {...restProps}
+                      dataLength={metricsData.length}
+                    />
+                  );
+                }}
                 activeDot={{
                   r: 6,
                   fill: DEEPSEEK_BLUE,

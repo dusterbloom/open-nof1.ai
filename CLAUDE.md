@@ -84,7 +84,7 @@ The trading logic follows this sequence (see `lib/ai/run.ts`):
 - `Metrics`: Time-series account performance data (JSON array format)
 - `Chat`: Stores each AI invocation's reasoning, prompt, and decision
 - `Trading`: Individual trade records linked to Chat entries
-- Enums: `Opeartion` (Buy/Sell/Hold), `Symbol` (BTC/ETH/BNB/SOL/DOGE), `ModelType` (Deepseek variants)
+- Enums: `operation` (Buy/Sell/Hold), `Symbol` (BTC/ETH/BNB/SOL/DOGE), `ModelType` (Deepseek variants)
 
 ### Important Technical Details
 

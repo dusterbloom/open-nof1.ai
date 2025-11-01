@@ -39,7 +39,7 @@ model Trading {
   id String @id @default(uuid())
 
   symbol     Symbol
-  opeartion  Opeartion
+  operation  operation
   leverage   Int?
   amount     Int?
   pricing    Int?
@@ -53,7 +53,7 @@ model Trading {
   chatId String?
 }
 
-enum Opeartion {
+enum operation {
   Buy
   Sell
   Hold

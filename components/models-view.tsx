@@ -15,7 +15,7 @@ import remarkGfm from "remark-gfm";
 interface Trading {
   id: string;
   symbol: string;
-  opeartion: "Buy" | "Sell" | "Hold";
+  operation: "Buy" | "Sell" | "Hold";
   leverage?: number | null;
   amount?: number | null;
   pricing?: number | null;
@@ -37,10 +37,24 @@ interface Chat {
 
 type TabType = "completed-trades" | "model-chat" | "positions";
 
+interface Position {
+  symbol: string;
+  side: "long" | "short";
+  size: number;
+  entryPrice: number;
+  leverage: number;
+  currentPrice: number;
+  unrealizedPnl: number;
+  pnlPercentage: number;
+  margin: number;
+}
+
 export function ModelsView() {
   const [activeTab, setActiveTab] = useState<TabType>("model-chat");
   const [chats, setChats] = useState<Chat[]>([]);
+  const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
+  const [positionsLoading, setPositionsLoading] = useState(true);
   const [expandedChatId, setExpandedChatId] = useState<string | null>(null);
 
   const fetchChats = useCallback(async () => {
@@ -57,16 +71,35 @@ export function ModelsView() {
     }
   }, []);
 
+  const fetchPositions = useCallback(async () => {
+    try {
+      const response = await fetch("/api/positions");
+      if (!response.ok) return;
+
+      const data = await response.json();
+      setPositions(data.data?.positions || []);
+      setPositionsLoading(false);
+    } catch (err) {
+      console.error("Error fetching positions:", err);
+      setPositionsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchChats();
-    const interval = setInterval(fetchChats, 30000);
-    return () => clearInterval(interval);
-  }, [fetchChats]);
+    fetchPositions();
+    const chatsInterval = setInterval(fetchChats, 30000);
+    const positionsInterval = setInterval(fetchPositions, 10000);
+    return () => {
+      clearInterval(chatsInterval);
+      clearInterval(positionsInterval);
+    };
+  }, [fetchChats, fetchPositions]);
 
   // 只获取 Buy 和 Sell 操作的交易
   const completedTrades = chats.flatMap((chat) =>
     chat.tradings
-      .filter((t) => t.opeartion === "Buy" || t.opeartion === "Sell")
+      .filter((t) => t.operation === "Buy" || t.operation === "Sell")
       .map((t) => ({ ...t, chatId: chat.id, model: chat.model }))
   );
 
@@ -108,9 +141,9 @@ export function ModelsView() {
               {/* Header with operation */}
               <div className="flex items-center justify-between mb-3 pb-3 border-b">
                 <div className="flex items-center gap-2">
-                  {renderOperationIcon(trade.opeartion)}
+                  {renderOperationIcon(trade.operation)}
                   <span className="font-bold text-base">
-                    {trade.opeartion.toUpperCase()}
+                    {trade.operation.toUpperCase()}
                   </span>
                   <span className="font-mono font-bold text-base">
                     {trade.symbol}
@@ -132,7 +165,7 @@ export function ModelsView() {
                 {trade.pricing && (
                   <div className="space-y-1">
                     <div className="text-xs text-muted-foreground font-medium">
-                      {trade.opeartion === "Buy" ? "Entry Price" : "Exit Price"}
+                      {trade.operation === "Buy" ? "Entry Price" : "Exit Price"}
                     </div>
                     <div className="font-mono font-bold text-base">
                       $
@@ -145,14 +178,14 @@ export function ModelsView() {
                 )}
 
                 {/* Amount */}
-                {trade.amount && (
+                {trade.amount && trade.pricing && (
                   <div className="space-y-1">
                     <div className="text-xs text-muted-foreground font-medium">
                       Amount
                     </div>
                     <div className="font-mono font-semibold">
-                      {trade.amount}{" "}
-                      {trade.symbol?.includes("/") ? "units" : trade.symbol}
+                      {(trade.amount / trade.pricing).toFixed(8)}{" "}
+                      {trade.symbol.split("/")[0]}
                     </div>
                   </div>
                 )}
@@ -220,6 +253,120 @@ export function ModelsView() {
                   <span className="font-medium text-foreground">
                     {trade.model}
                   </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  };
+
+  const renderPositions = () => {
+    if (positionsLoading) {
+      return <div className="text-center py-8 text-sm">Loading positions...</div>;
+    }
+
+    if (positions.length === 0) {
+      return (
+        <div className="text-center py-8 text-muted-foreground text-sm">
+          No open positions
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        <div className="text-xs text-muted-foreground mb-2">
+          {positions.length} open position{positions.length > 1 ? "s" : ""}
+        </div>
+        {positions.map((position, idx) => (
+          <Card key={idx} className="overflow-hidden">
+            <CardContent className="p-4">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-3 pb-3 border-b">
+                <div className="flex items-center gap-2">
+                  <TrendingUp className="h-4 w-4 text-green-500" />
+                  <span className="font-bold text-base uppercase">
+                    {position.side}
+                  </span>
+                  <span className="font-mono font-bold text-base">
+                    {position.symbol}
+                  </span>
+                </div>
+                <div
+                  className={`text-sm font-bold ${
+                    position.unrealizedPnl >= 0
+                      ? "text-green-500"
+                      : "text-red-500"
+                  }`}
+                >
+                  {position.unrealizedPnl >= 0 ? "+" : ""}
+                  {position.unrealizedPnl.toFixed(2)} USDT
+                </div>
+              </div>
+
+              {/* Position details grid */}
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground font-medium">
+                    Entry Price
+                  </div>
+                  <div className="font-mono font-bold">
+                    ${position.entryPrice.toLocaleString()}
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground font-medium">
+                    Current Price
+                  </div>
+                  <div className="font-mono font-bold">
+                    ${position.currentPrice.toLocaleString()}
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground font-medium">
+                    Size
+                  </div>
+                  <div className="font-mono font-semibold">
+                    ${position.size.toLocaleString()} USDT
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground font-medium">
+                    Leverage
+                  </div>
+                  <div className="font-mono font-semibold text-purple-600">
+                    {position.leverage}x
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground font-medium">
+                    Margin
+                  </div>
+                  <div className="font-mono font-semibold">
+                    ${position.margin.toFixed(2)} USDT
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground font-medium">
+                    PnL %
+                  </div>
+                  <div
+                    className={`font-mono font-bold ${
+                      position.pnlPercentage >= 0
+                        ? "text-green-500"
+                        : "text-red-500"
+                    }`}
+                  >
+                    {position.pnlPercentage >= 0 ? "+" : ""}
+                    {position.pnlPercentage.toFixed(2)}%
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -326,18 +473,18 @@ export function ModelsView() {
                           <div
                             key={idx}
                             className={`rounded-lg p-3 border-l-4 ${
-                              decision.opeartion === "Buy"
+                              decision.operation === "Buy"
                                 ? "bg-green-50 dark:bg-green-950/20 border-green-500"
-                                : decision.opeartion === "Sell"
+                                : decision.operation === "Sell"
                                 ? "bg-red-50 dark:bg-red-950/20 border-red-500"
                                 : "bg-yellow-50 dark:bg-yellow-950/20 border-yellow-500"
                             }`}
                           >
                             {/* Decision header */}
                             <div className="flex items-center gap-2 mb-2">
-                              {renderOperationIcon(decision.opeartion)}
+                              {renderOperationIcon(decision.operation)}
                               <span className="font-bold text-sm">
-                                {decision.opeartion.toUpperCase()}
+                                {decision.operation.toUpperCase()}
                               </span>
                               <span className="font-mono font-bold text-sm">
                                 {decision.symbol}
@@ -349,9 +496,9 @@ export function ModelsView() {
                               {decision.pricing && (
                                 <div className="flex justify-between items-center">
                                   <span className="text-muted-foreground">
-                                    {decision.opeartion === "Buy"
+                                    {decision.operation === "Buy"
                                       ? "Entry Price:"
-                                      : decision.opeartion === "Sell"
+                                      : decision.operation === "Sell"
                                       ? "Exit Price:"
                                       : "Current Price:"}
                                   </span>
@@ -360,13 +507,14 @@ export function ModelsView() {
                                   </span>
                                 </div>
                               )}
-                              {decision.amount && (
+                              {decision.amount && decision.pricing && (
                                 <div className="flex justify-between items-center">
                                   <span className="text-muted-foreground">
                                     Amount:
                                   </span>
                                   <span className="font-mono font-semibold">
-                                    {decision.amount}
+                                    {(decision.amount / decision.pricing).toFixed(8)}{" "}
+                                    {decision.symbol.split("/")[0]}
                                   </span>
                                 </div>
                               )}
@@ -492,11 +640,7 @@ export function ModelsView() {
         <div className="flex-1 overflow-y-auto min-h-0 -mx-4 px-4">
           {activeTab === "model-chat" && renderModelChat()}
           {activeTab === "completed-trades" && renderCompletedTrades()}
-          {activeTab === "positions" && (
-            <div className="text-center py-8 text-muted-foreground text-sm">
-              Positions view coming soon...
-            </div>
-          )}
+          {activeTab === "positions" && renderPositions()}
         </div>
       </CardContent>
     </Card>

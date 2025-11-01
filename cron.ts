@@ -7,7 +7,7 @@ const runMetricsInterval = async () => {
     {
       sub: "cron-token",
     },
-    process.env.CRON_SECRET_KEY || ""
+    process.env.CRON_SECRET_KEY || "1234"
   );
 
   await fetch(
@@ -31,7 +31,7 @@ const runChatInterval = async () => {
     {
       sub: "cron-token",
     },
-    process.env.CRON_SECRET_KEY || ""
+    process.env.CRON_SECRET_KEY || "1234"
   );
 
   await fetch(

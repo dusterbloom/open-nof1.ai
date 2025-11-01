@@ -97,14 +97,23 @@ export default function Home() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-4xl font-bold tracking-tight">
-              Open Nof1.ai
-              <span className="text-muted-foreground text-sm ml-2">
-                inspired by Alpha Arena
-              </span>
-            </h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-4xl font-bold tracking-tight">
+                Open Nof1.ai
+                <span className="text-muted-foreground text-sm ml-2">
+                  inspired by Alpha Arena
+                </span>
+              </h1>
+              {process.env.NEXT_PUBLIC_TRADING_MODE === "dry_run" && (
+                <span className="inline-flex items-center rounded-md bg-yellow-500/10 px-3 py-1 text-sm font-medium text-yellow-500 ring-1 ring-inset ring-yellow-500/20">
+                  DEMO MODE
+                </span>
+              )}
+            </div>
             <p className="text-muted-foreground mt-2">
-              Real-time trading metrics and performance
+              {process.env.NEXT_PUBLIC_TRADING_MODE === "dry_run"
+                ? "Paper trading simulation - No real money at risk"
+                : "Real-time trading metrics and performance"}
             </p>
           </div>
           {lastUpdate && (

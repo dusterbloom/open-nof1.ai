@@ -203,31 +203,31 @@ RSI indicators (14‑Period): [${state.longer_term.rsi_14.join(", ")}]
 
 ```typescript
 import { z } from "zod";
-import { Opeartion, Symbol } from "@prisma/client";
+import { operation, Symbol } from "@prisma/client";
 
 const tradingDecisionSchema = z.object({
-  opeartion: z.nativeEnum(Opeartion), // Buy, Sell, Hold
+  operation: z.nativeEnum(operation), // Buy, Sell, Hold
 
   buy: z.object({
     pricing: z.number().describe("The pricing of you want to buy in."),
     amount: z.number(),
     leverage: z.number().min(1).max(20),
-  }).optional().describe("If opeartion is buy, generate object"),
+  }).optional().describe("If operation is buy, generate object"),
 
   sell: z.object({
     percentage: z.number().min(0).max(100)
       .describe("Percentage of position to sell"),
-  }).optional().describe("If opeartion is sell, generate object"),
+  }).optional().describe("If operation is sell, generate object"),
 
   adjustProfit: z.object({
     stopLoss: z.number().optional()
       .describe("The stop loss of you want to set."),
     takeProfit: z.number().optional()
       .describe("The take profit of you want to set."),
-  }).optional().describe("If opeartion is hold and you want to adjust profit"),
+  }).optional().describe("If operation is hold and you want to adjust profit"),
 
   chat: z.string().describe(
-    "The reason why you do this opeartion, and tell me your analysis"
+    "The reason why you do this operation, and tell me your analysis"
   ),
 });
 ```
@@ -250,7 +250,7 @@ const { object, reasoning } = await generateObject({
 });
 
 // Additional validation beyond schema
-if (object.opeartion === Opeartion.Buy) {
+if (object.operation === operation.Buy) {
   const balance = await fetchBalance();
   const requiredMargin = (object.buy!.pricing * object.buy!.amount) / object.buy!.leverage;
 
@@ -259,7 +259,7 @@ if (object.opeartion === Opeartion.Buy) {
   }
 }
 
-if (object.opeartion === Opeartion.Sell) {
+if (object.operation === operation.Sell) {
   const positions = await fetchPositions();
   const currentPosition = positions.find(p => p.symbol === "BTC/USDT");
 
@@ -296,7 +296,7 @@ const safeLeverage = Math.min(aiDecision.buy.leverage, maxAllowedLeverage);
 
 ```typescript
 // Never enter position without stop loss
-if (aiDecision.opeartion === Opeartion.Buy) {
+if (aiDecision.operation === operation.Buy) {
   if (!aiDecision.buy.stopLoss && !aiDecision.adjustProfit?.stopLoss) {
     // Calculate automatic stop loss if AI didn't provide
     const autoStopLoss = aiDecision.buy.pricing * 0.95; // 5% below entry
@@ -370,8 +370,8 @@ console.log("AI Decision:", testDecision.object);
 console.log("AI Reasoning:", testDecision.reasoning);
 
 // Verify schema compliance
-expect(testDecision.object.opeartion).toBeOneOf(['Buy', 'Sell', 'Hold']);
-if (testDecision.object.opeartion === 'Buy') {
+expect(testDecision.object.operation).toBeOneOf(['Buy', 'Sell', 'Hold']);
+if (testDecision.object.operation === 'Buy') {
   expect(testDecision.object.buy).toBeDefined();
   expect(testDecision.object.buy.leverage).toBeGreaterThanOrEqual(1);
   expect(testDecision.object.buy.leverage).toBeLessThanOrEqual(20);

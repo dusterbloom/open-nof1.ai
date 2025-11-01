@@ -1,5 +1,6 @@
 import { EMA, MACD, RSI, ATR } from "technicalindicators";
 import { binance } from "./binance";
+import { isDryRunMode } from "./dry-run-wallet";
 
 export interface MarketState {
   // Current indicators
@@ -89,6 +90,19 @@ function calculateATR(
 }
 
 /**
+ * Create a Binance Spot exchange instance for public data (no auth required)
+ */
+function createSpotExchange() {
+  const ccxt = require("ccxt");
+  return new ccxt.binance({
+    // No API keys needed for public endpoints
+    options: {
+      defaultType: "spot", // Use spot market for public data
+    },
+  });
+}
+
+/**
  * Fetch current market state for a given coin symbol
  * @param symbol - Trading pair symbol (e.g., 'BTC/USDT')
  * @returns Market state with all technical indicators
@@ -100,8 +114,12 @@ export async function getCurrentMarketState(
     // Normalize symbol format for Binance
     const normalizedSymbol = symbol.includes("/") ? symbol : `${symbol}/USDT`;
 
+    // In dry-run mode, use Binance Spot API (public, no auth required)
+    // In live mode, use configured exchange (futures with auth)
+    const exchange = isDryRunMode() ? createSpotExchange() : binance;
+
     // Fetch 1-minute OHLCV data (last 100 candles for intraday analysis)
-    const ohlcv1m = await binance.fetchOHLCV(
+    const ohlcv1m = await exchange.fetchOHLCV(
       normalizedSymbol,
       "1m",
       undefined,
@@ -109,7 +127,7 @@ export async function getCurrentMarketState(
     );
 
     // Fetch 4-hour OHLCV data (last 100 candles for longer-term context)
-    const ohlcv4h = await binance.fetchOHLCV(
+    const ohlcv4h = await exchange.fetchOHLCV(
       normalizedSymbol,
       "4h",
       undefined,
@@ -157,27 +175,30 @@ export async function getCurrentMarketState(
     const current_rsi = Number(rsi7_1m[rsi7_1m.length - 1]) || 0;
 
     // Fetch open interest and funding rate for perpetual futures
+    // Skip in dry-run mode (Spot API doesn't have these)
     const openInterestData = { latest: 0, average: 0 };
     let fundingRate = 0;
 
-    try {
-      // Try to fetch open interest
-      const perpSymbol = normalizedSymbol.replace("/", "");
-      const openInterest = await binance.fetchOpenInterest(perpSymbol);
+    if (!isDryRunMode()) {
+      try {
+        // Try to fetch open interest (futures only)
+        const perpSymbol = normalizedSymbol.replace("/", "");
+        const openInterest = await binance.fetchOpenInterest(perpSymbol);
 
-      if (openInterest && typeof openInterest.openInterestAmount === "number") {
-        openInterestData.latest = openInterest.openInterestAmount;
-        openInterestData.average = openInterest.openInterestAmount; // Using same value as average
-      }
+        if (openInterest && typeof openInterest.openInterestAmount === "number") {
+          openInterestData.latest = openInterest.openInterestAmount;
+          openInterestData.average = openInterest.openInterestAmount; // Using same value as average
+        }
 
-      // Try to fetch funding rate
-      const fundingRates = await binance.fetchFundingRate(normalizedSymbol);
-      if (fundingRates && typeof fundingRates.fundingRate === "number") {
-        fundingRate = fundingRates.fundingRate;
+        // Try to fetch funding rate (futures only)
+        const fundingRates = await binance.fetchFundingRate(normalizedSymbol);
+        if (fundingRates && typeof fundingRates.fundingRate === "number") {
+          fundingRate = fundingRates.fundingRate;
+        }
+      } catch (error) {
+        console.warn("Could not fetch open interest or funding rate:", error);
+        // Continue with default values
       }
-    } catch (error) {
-      console.warn("Could not fetch open interest or funding rate:", error);
-      // Continue with default values
     }
 
     // Calculate average volume for 4-hour timeframe

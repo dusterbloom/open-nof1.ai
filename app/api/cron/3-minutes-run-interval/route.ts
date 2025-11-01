@@ -17,7 +17,14 @@ export const GET = async (request: NextRequest) => {
     return new Response("Invalid token", { status: 401 });
   }
 
-  await run(Number(process.env.START_MONEY));
-
-  return new Response("Process executed successfully");
+  try {
+    await run(Number(process.env.START_MONEY));
+    return new Response("Process executed successfully");
+  } catch (error) {
+    console.error("[CRON] AI trading execution failed:", error);
+    return new Response(
+      JSON.stringify({ error: "Trading execution failed", details: error instanceof Error ? error.message : String(error) }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
 };
