@@ -25,52 +25,93 @@ export const GET = async () => {
     if (positions.length === 0) {
       console.log("[POSITIONS] Wallet is empty, attempting to restore from database...");
 
-      // Get all unique open positions by finding BUY trades that are either:
-      // 1. Have no corresponding SELL trade with the same positionId
-      // 2. Have only partial SELLs (for future implementation)
+      // Get all BUY trades (both with and without positionId for legacy support)
       const buyTrades = await prisma.trading.findMany({
         where: {
           operation: "Buy",
           success: true, // Only successful trades
-          positionId: {
-            not: null, // Only trades with positionId (newer trades)
-          },
         },
         orderBy: {
           createdAt: "desc",
         },
       });
+      console.log(`[POSITIONS] Found ${buyTrades.length} successful BUY trades to check`);
+
+      // Track which symbols we've already restored (only one position per symbol allowed)
+      const restoredSymbols = new Set<string>();
 
       // For each buy trade, check if the position has been fully closed
       for (const trade of buyTrades) {
-        if (!trade.positionId) continue; // Skip trades without positionId
+        // Skip if we've already restored a position for this symbol
+        if (restoredSymbols.has(trade.symbol)) {
+          console.log(`[POSITIONS] Skipping ${trade.symbol} @ ${trade.pricing} - already restored more recent position`);
+          continue;
+        }
 
-        // Check if this position has been fully closed (100% sell)
-        const sellTrade = await prisma.trading.findFirst({
-          where: {
-            operation: "Sell",
-            positionId: trade.positionId, // Match by positionId
-            success: true,
-          },
-        });
+        const tradeLabel = trade.positionId || `legacy-${trade.symbol}-${trade.createdAt.toISOString()}`;
+        console.log(`[POSITIONS] Checking trade: ${tradeLabel}`);
+        console.log(`[POSITIONS]   Symbol: ${trade.symbol}, Amount: ${trade.amount}, Price: ${trade.pricing}`);
 
-        // If no sell trade found with this positionId, position is still open - restore it
+        let sellTrade;
+
+        if (trade.positionId) {
+          // New method: Match by positionId (preferred)
+          console.log(`[POSITIONS]   Using positionId matching for ${trade.positionId}`);
+          sellTrade = await prisma.trading.findFirst({
+            where: {
+              operation: "Sell",
+              positionId: trade.positionId,
+              success: true,
+            },
+          });
+        } else {
+          // Legacy method: Match by symbol and time (for trades without positionId)
+          console.log(`[POSITIONS]   Using legacy symbol+time matching for ${trade.symbol}`);
+          sellTrade = await prisma.trading.findFirst({
+            where: {
+              operation: "Sell",
+              symbol: trade.symbol,
+              success: true,
+              createdAt: {
+                gt: trade.createdAt, // SELL must be after BUY
+              },
+            },
+            orderBy: {
+              createdAt: "asc", // Get the earliest SELL after this BUY
+            },
+          });
+        }
+
+        if (sellTrade) {
+          console.log(`[POSITIONS]   ❌ Position closed by SELL at ${sellTrade.createdAt.toISOString()}`);
+        } else {
+          console.log(`[POSITIONS]   ✅ No SELL found - position appears open`);
+        }
+
+        // If no sell trade found, position is still open - restore it
         if (!sellTrade && trade.amount && trade.pricing) {
-          console.log(`[POSITIONS] Restoring position ${trade.positionId} for ${trade.symbol}`);
+          const positionLabel = trade.positionId || `legacy-${trade.symbol}`;
+          console.log(`[POSITIONS] Restoring position ${positionLabel} for ${trade.symbol}`);
 
           // Restore position to wallet by simulating the buy
           const { buy } = await import("@/lib/trading/buy");
           try {
-            await buy({
+            const result = await buy({
               symbol: `${trade.symbol}/USDT`,
               size: trade.amount,
               leverage: trade.leverage || 1,
               price: trade.pricing,
             });
-            console.log(`[POSITIONS] Successfully restored ${trade.symbol} position`);
+
+            if (result.success) {
+              console.log(`[POSITIONS] Successfully restored ${trade.symbol} position`);
+              // Mark this symbol as restored so we skip older positions
+              restoredSymbols.add(trade.symbol);
+            } else {
+              console.log(`[POSITIONS] Failed to restore: ${result.error}`);
+            }
           } catch (error) {
-            // Ignore errors if position already exists
-            console.log(`[POSITIONS] Skipping restore: ${error}`);
+            console.log(`[POSITIONS] Exception during restore: ${error}`);
           }
         }
       }
