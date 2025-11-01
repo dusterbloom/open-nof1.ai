@@ -109,19 +109,23 @@ class DryRunWallet {
   }
 
   /**
-   * Calculate total account value (balance + unrealized PnL)
+   * Calculate total account value (balance + locked margin + unrealized PnL)
    */
   getTotalAccountValue(currentPrices: Record<string, number>): number {
     let totalUnrealizedPnL = 0;
+    let totalLockedMargin = 0;
 
     for (const position of this.state.positions) {
       const currentPrice = currentPrices[position.symbol];
       if (currentPrice) {
         totalUnrealizedPnL += this.calculateUnrealizedPnL(position, currentPrice);
       }
+      // Add the margin locked in this position (position size / leverage)
+      totalLockedMargin += position.size / position.leverage;
     }
 
-    return this.state.balance + totalUnrealizedPnL;
+    // Total account value = free balance + locked margin + unrealized PnL
+    return this.state.balance + totalLockedMargin + totalUnrealizedPnL;
   }
 
   /**
