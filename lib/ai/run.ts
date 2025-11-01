@@ -36,11 +36,17 @@ export async function run(initialCapital: number) {
   // Count previous Chat entries to provide an invocation counter in the prompt
   const invocationCount = await prisma.chat.count();
 
+  // Get the start time from the first trade or first chat entry
+  const firstTrade = await prisma.trading.findFirst({
+    orderBy: { createdAt: "asc" },
+  });
+  const startTime = firstTrade?.createdAt || new Date();
+
   const userPrompt = generateUserPrompt({
     currentMarketState: marketStates[0].data, // Keep for backward compatibility
     marketStates, // New: all market states
     accountInformationAndPerformance,
-    startTime: new Date(),
+    startTime,
     invocationCount,
   });
 
