@@ -1,28 +1,103 @@
 {
     "version": "1.0",
-    "description": "Skill activation triggers for MCP SME Toolkit project. Controls when skills automatically suggest actions.",
+    "description": "Skill activation triggers for open-nof1.ai cryptocurrency trading platform. Controls when skills automatically suggest actions.",
     "skills": {
-        "skill-developer": {
+        "exchange-integration-patterns": {
             "type": "domain",
             "enforcement": "suggest",
             "priority": "high",
-            "description": "Meta-skill for creating and managing Claude Code skills",
+            "description": "Provides guidance on integrating cryptocurrency exchanges (CEX and DEX) using CCXT library. Covers authentication, market data, order placement, position management, and migration patterns.",
             "promptTriggers": {
                 "keywords": [
-                    "skill system",
-                    "create skill",
-                    "add skill",
-                    "skill triggers",
-                    "skill rules",
-                    "hook system",
-                    "skill development",
-                    "skill-rules.json",
-                    "claude code infrastructure"
+                    "exchange",
+                    "binance",
+                    "hyperliquid",
+                    "dex",
+                    "cex",
+                    "ccxt",
+                    "trading api",
+                    "exchange integration",
+                    "migrate exchange",
+                    "swap exchange",
+                    "mexc",
+                    "dydx",
+                    "order placement",
+                    "position management",
+                    "wallet signing"
                 ],
                 "intentPatterns": [
-                    "(how do|how does|explain).*?skill",
-                    "(create|add|modify|build).*?skill",
-                    "skill.*?(work|trigger|activate|system)"
+                    "(integrate|connect|use|setup).*?(exchange|binance|hyperliquid)",
+                    "(migrate|switch|change).*?exchange",
+                    "(place|create|submit).*?order",
+                    "(fetch|get).*?(balance|position|market data)",
+                    "(how to|how do I).*?(trade|exchange|api)"
+                ]
+            },
+            "fileTriggers": {
+                "pathPatterns": [
+                    "lib/trading/**/*.ts",
+                    "lib/trading/binance.ts",
+                    "lib/trading/buy.ts",
+                    "lib/trading/sell.ts",
+                    "lib/trading/current-market-state.ts",
+                    "lib/trading/account-information-and-performance.ts"
+                ],
+                "contentPatterns": [
+                    "ccxt",
+                    "binance\\.",
+                    "fetchOHLCV",
+                    "fetchPositions",
+                    "createMarketOrder",
+                    "fetchBalance"
+                ]
+            }
+        },
+        "ai-trading-patterns": {
+            "type": "domain",
+            "enforcement": "suggest",
+            "priority": "high",
+            "description": "Provides guidance on AI-driven trading systems including prompt engineering, model selection (DeepSeek), schema design with Zod, risk management, and decision validation.",
+            "promptTriggers": {
+                "keywords": [
+                    "trading prompt",
+                    "ai trading",
+                    "deepseek",
+                    "ai model",
+                    "prompt engineering",
+                    "trading decision",
+                    "generateObject",
+                    "ai schema",
+                    "trading ai",
+                    "model reasoning",
+                    "risk management",
+                    "position sizing",
+                    "stop loss",
+                    "leverage"
+                ],
+                "intentPatterns": [
+                    "(prompt|ai).*?(trading|decision|analysis)",
+                    "(improve|optimize|update).*?prompt",
+                    "(deepseek|model).*?(decision|reasoning)",
+                    "(validate|check).*?(ai|decision)",
+                    "(risk|position).*?(management|sizing)"
+                ]
+            },
+            "fileTriggers": {
+                "pathPatterns": [
+                    "lib/ai/**/*.ts",
+                    "lib/ai/prompt.ts",
+                    "lib/ai/run.ts",
+                    "lib/ai/model.ts",
+                    "lib/ai/tool.ts"
+                ],
+                "contentPatterns": [
+                    "generateObject",
+                    "deepseek",
+                    "tradingPrompt",
+                    "generateUserPrompt",
+                    "z\\.object",
+                    "Opeartion",
+                    "leverage"
                 ]
             }
         },
@@ -82,9 +157,14 @@
             "low": "Optional - Trigger only for explicit matches"
         },
         "customization": {
-            "pathPatterns": "Adjust to match your MCP server structure",
-            "keywords": "Add MCP and domain-specific terms",
+            "pathPatterns": "Adjust to match your project structure (lib/ai, lib/trading, app/api)",
+            "keywords": "Add cryptocurrency trading and AI-specific terms",
             "intentPatterns": "Use regex for flexible user intent matching"
+        },
+        "project_context": {
+            "description": "open-nof1.ai: AI-powered cryptocurrency trading platform",
+            "tech_stack": "Next.js 15, TypeScript, Bun, Prisma, PostgreSQL, CCXT, Vercel AI SDK, DeepSeek",
+            "core_functionality": "AI makes trading decisions on crypto markets with real money"
         }
     }
 }
