@@ -1,0 +1,1 @@
+prisma:build:cd /mnt/c/Users/PC/Dev/open-nof1.ai/prisma && npx prisma generate

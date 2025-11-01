@@ -21,6 +21,19 @@ export const binance = new ccxt.binance({
   },
 });
 
+// Validate API keys in live mode
+if (!isDryRunMode()) {
+  if (!process.env.BINANCE_API_KEY || !process.env.BINANCE_API_SECRET) {
+    console.error("[BINANCE] CRITICAL ERROR: Live trading mode requires valid API keys!");
+    console.error("[BINANCE] Please set BINANCE_API_KEY and BINANCE_API_SECRET in .env file");
+    console.error("[BINANCE] To use simulation mode, set TRADING_MODE=dry_run");
+    throw new Error("Missing Binance API credentials for live trading mode. Cannot proceed without valid API keys.");
+  }
+  console.log("[BINANCE] Live trading mode enabled with valid API keys");
+} else {
+  console.log("[BINANCE] Dry-run mode enabled - trades will be simulated");
+}
+
 // Sandbox mode is deprecated for Binance futures
 // Only set it if not in dry-run mode and explicitly enabled
 if (!isDryRunMode() && process.env.BINANCE_USE_SANDBOX === "true") {
@@ -30,8 +43,4 @@ if (!isDryRunMode() && process.env.BINANCE_USE_SANDBOX === "true") {
   } catch (error) {
     console.warn("[BINANCE] Sandbox mode failed:", error);
   }
-}
-
-if (isDryRunMode()) {
-  console.log("[BINANCE] Dry-run mode enabled - trades will be simulated");
 }

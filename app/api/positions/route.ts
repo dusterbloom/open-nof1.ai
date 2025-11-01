@@ -24,31 +24,40 @@ export const GET = async () => {
     // If wallet is empty, try to restore positions from database
     if (positions.length === 0) {
       console.log("[POSITIONS] Wallet is empty, attempting to restore from database...");
-      // Get all BUY trades from database that haven't been closed with a SELL
+
+      // Get all unique open positions by finding BUY trades that are either:
+      // 1. Have no corresponding SELL trade with the same positionId
+      // 2. Have only partial SELLs (for future implementation)
       const buyTrades = await prisma.trading.findMany({
         where: {
           operation: "Buy",
+          success: true, // Only successful trades
+          positionId: {
+            not: null, // Only trades with positionId (newer trades)
+          },
         },
         orderBy: {
           createdAt: "desc",
         },
       });
 
-      // For each buy trade, check if there's a corresponding sell
+      // For each buy trade, check if the position has been fully closed
       for (const trade of buyTrades) {
-        // Check if this position has been closed
+        if (!trade.positionId) continue; // Skip trades without positionId
+
+        // Check if this position has been fully closed (100% sell)
         const sellTrade = await prisma.trading.findFirst({
           where: {
             operation: "Sell",
-            symbol: trade.symbol,
-            createdAt: {
-              gt: trade.createdAt,
-            },
+            positionId: trade.positionId, // Match by positionId
+            success: true,
           },
         });
 
-        // If no sell trade found, this position is still open - restore it
+        // If no sell trade found with this positionId, position is still open - restore it
         if (!sellTrade && trade.amount && trade.pricing) {
+          console.log(`[POSITIONS] Restoring position ${trade.positionId} for ${trade.symbol}`);
+
           // Restore position to wallet by simulating the buy
           const { buy } = await import("@/lib/trading/buy");
           try {
@@ -58,6 +67,7 @@ export const GET = async () => {
               leverage: trade.leverage || 1,
               price: trade.pricing,
             });
+            console.log(`[POSITIONS] Successfully restored ${trade.symbol} position`);
           } catch (error) {
             // Ignore errors if position already exists
             console.log(`[POSITIONS] Skipping restore: ${error}`);
@@ -67,6 +77,7 @@ export const GET = async () => {
 
       // Refresh positions after restoration
       positions = dryRunWallet.getPositions();
+      console.log(`[POSITIONS] Restored ${positions.length} positions from database`);
     }
 
     // Fetch current prices to calculate unrealized PnL

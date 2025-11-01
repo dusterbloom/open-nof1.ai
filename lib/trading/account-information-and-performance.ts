@@ -30,49 +30,59 @@ function createSpotExchange() {
 async function getDryRunAccountInformation(
   initialCapital: number
 ): Promise<AccountInformationAndPerformance> {
-  // Fetch current BTC price for PnL calculation using Spot API (no auth required)
-  let currentBtcPrice = 0;
+  // Fetch current prices for ALL supported cryptocurrencies using Spot API (no auth required)
+  const supportedSymbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"];
+  const currentPrices: Record<string, number> = {};
+
   try {
     const spotExchange = createSpotExchange();
-    const ticker = await spotExchange.fetchTicker("BTC/USDT");
-    currentBtcPrice = ticker.last || 0;
+    const tickers = await spotExchange.fetchTickers(supportedSymbols);
+
+    for (const symbol of supportedSymbols) {
+      currentPrices[symbol] = tickers[symbol]?.last || 0;
+    }
   } catch (error) {
-    console.warn("[DRY-RUN] Failed to fetch BTC price, using 0:", error);
+    console.warn("[DRY-RUN] Failed to fetch prices, using 0:", error);
+    // Fallback: set all prices to 0
+    for (const symbol of supportedSymbols) {
+      currentPrices[symbol] = 0;
+    }
   }
 
   const simulatedPositions = dryRunWallet.getPositions();
   const balance = dryRunWallet.getBalance();
-  const metrics = dryRunWallet.getPerformanceMetrics({
-    "BTC/USDT": currentBtcPrice,
-  });
+  const metrics = dryRunWallet.getPerformanceMetrics(currentPrices);
 
   // Convert simulated positions to CCXT Position format
-  const positions: Position[] = simulatedPositions.map((pos) => ({
-    symbol: pos.symbol,
-    contracts: pos.size / (pos.entryPrice || 1),
-    contractSize: 1,
-    unrealizedPnl: pos.unrealizedPnl || 0,
-    leverage: pos.leverage,
-    liquidationPrice: 0, // Not calculated in simulation
-    collateral: pos.size / pos.leverage,
-    notional: pos.size,
-    markPrice: currentBtcPrice,
-    entryPrice: pos.entryPrice,
-    timestamp: pos.timestamp,
-    isolated: false,
-    side: pos.side === "long" ? "long" : "short",
-    percentage: pos.unrealizedPnl ? (pos.unrealizedPnl / pos.size) * 100 : 0,
-    info: {},
-    initialMargin: pos.size / pos.leverage,
-    initialMarginPercentage: 1 / pos.leverage,
-    maintenanceMargin: 0,
-    maintenanceMarginPercentage: 0,
-    marginRatio: 0,
-    datetime: new Date(pos.timestamp).toISOString(),
-    marginMode: "cross",
-    marginType: "cross",
-    hedged: false,
-  }));
+  const positions: Position[] = simulatedPositions.map((pos) => {
+    const currentPrice = currentPrices[pos.symbol] || 0;
+    return {
+      symbol: pos.symbol,
+      contracts: pos.size / (pos.entryPrice || 1),
+      contractSize: 1,
+      unrealizedPnl: pos.unrealizedPnl || 0,
+      leverage: pos.leverage,
+      liquidationPrice: 0, // Not calculated in simulation
+      collateral: pos.size / pos.leverage,
+      notional: pos.size,
+      markPrice: currentPrice,
+      entryPrice: pos.entryPrice,
+      timestamp: pos.timestamp,
+      isolated: false,
+      side: pos.side === "long" ? "long" : "short",
+      percentage: pos.unrealizedPnl ? (pos.unrealizedPnl / pos.size) * 100 : 0,
+      info: {},
+      initialMargin: pos.size / pos.leverage,
+      initialMarginPercentage: 1 / pos.leverage,
+      maintenanceMargin: 0,
+      maintenanceMarginPercentage: 0,
+      marginRatio: 0,
+      datetime: new Date(pos.timestamp).toISOString(),
+      marginMode: "cross",
+      marginType: "cross",
+      hedged: false,
+    };
+  });
 
   const currentPositionsValue = positions.reduce((acc, position) => {
     return acc + (position.initialMargin || 0) + (position.unrealizedPnl || 0);
@@ -114,7 +124,13 @@ async function getDryRunAccountInformation(
 async function getLiveAccountInformation(
   initialCapital: number
 ): Promise<AccountInformationAndPerformance> {
-  const positions = await binance.fetchPositions(["BTC/USDT"]);
+  const positions = await binance.fetchPositions([
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "BNB/USDT",
+    "DOGE/USDT",
+  ]);
   const currentPositionsValue = positions.reduce((acc, position) => {
     return acc + (position.initialMargin || 0) + (position.unrealizedPnl || 0);
   }, 0);
@@ -125,12 +141,16 @@ async function getLiveAccountInformation(
   const totalCashValue = currentCashValue.USDT.total || 0;
   const availableCash = currentCashValue.USDT.free || 0;
   const currentTotalReturn = (totalCashValue - initialCapital) / initialCapital;
+
+  // Calculate Sharpe ratio with division by zero protection (same as dry-run mode)
+  const unrealizedPnlSum = positions.reduce((acc, position) => {
+    return acc + (position.unrealizedPnl || 0);
+  }, 0);
+
   const sharpeRatio =
-    currentTotalReturn /
-    (positions.reduce((acc, position) => {
-      return acc + (position.unrealizedPnl || 0);
-    }, 0) /
-      initialCapital);
+    unrealizedPnlSum !== 0 && initialCapital !== 0
+      ? currentTotalReturn / (Math.abs(unrealizedPnlSum) / initialCapital)
+      : 0;
 
   return {
     currentPositionsValue,

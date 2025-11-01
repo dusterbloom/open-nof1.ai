@@ -41,10 +41,17 @@ model Trading {
   symbol     Symbol
   operation  operation
   leverage   Int?
-  amount     Int?
-  pricing    Int?
-  stopLoss   Int?
-  takeProfit Int?
+  amount     Float?
+  pricing    Float?
+  stopLoss   Float?
+  takeProfit Float?
+
+  // Position tracking for buy/sell pairing
+  positionId String?
+
+  // Trade execution status
+  success      Boolean @default(true)
+  errorMessage String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useMemo } from "react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import {
   Card,
@@ -22,6 +23,8 @@ interface MetricsChartProps {
   lastUpdate: string;
   totalCount?: number;
 }
+
+type TimeRange = "ALL" | "72H" | "24H" | "1H";
 
 const chartConfig = {
   totalCashValue: {
@@ -106,6 +109,30 @@ export function MetricsChart({
   loading,
   totalCount,
 }: MetricsChartProps) {
+  const [timeRange, setTimeRange] = useState<TimeRange>("ALL");
+
+  // Filter data based on selected time range
+  const filteredData = useMemo(() => {
+    if (timeRange === "ALL") {
+      return metricsData;
+    }
+
+    const now = new Date();
+    const hoursMap = {
+      "1H": 1,
+      "24H": 24,
+      "72H": 72,
+    };
+
+    const hours = hoursMap[timeRange];
+    const cutoffTime = new Date(now.getTime() - hours * 60 * 60 * 1000);
+
+    return metricsData.filter((metric) => {
+      const metricTime = new Date(metric.createdAt);
+      return metricTime >= cutoffTime;
+    });
+  }, [metricsData, timeRange]);
+
   if (loading) {
     return (
       <Card>
@@ -119,25 +146,46 @@ export function MetricsChart({
   return (
     <Card className="h-full">
       <CardHeader className="pb-4">
-        <CardTitle className="text-lg">Total Account Value</CardTitle>
-        <CardDescription className="text-xs">
-          Real-time tracking • Updates every 10s
-          {metricsData.length > 0 && totalCount && (
-            <div className="mt-1">
-              {metricsData.length} of {totalCount.toLocaleString()} points
-            </div>
-          )}
-        </CardDescription>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-lg">Total Account Value</CardTitle>
+            <CardDescription className="text-xs">
+              Real-time tracking • Updates every 10s
+              {filteredData.length > 0 && totalCount && (
+                <div className="mt-1">
+                  {filteredData.length} of {totalCount.toLocaleString()} points
+                </div>
+              )}
+            </CardDescription>
+          </div>
+
+          {/* Time Range Tabs */}
+          <div className="flex gap-1 border rounded-lg p-1">
+            {(["ALL", "72H", "24H", "1H"] as TimeRange[]).map((range) => (
+              <button
+                key={range}
+                onClick={() => setTimeRange(range)}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                  timeRange === range
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {range}
+              </button>
+            ))}
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="px-2 sm:px-4 pb-4">
-        {metricsData.length > 0 ? (
+        {filteredData.length > 0 ? (
           <ChartContainer
             config={chartConfig}
             className="aspect-auto h-[400px] w-full"
           >
             <LineChart
               accessibilityLayer
-              data={metricsData}
+              data={filteredData}
               margin={{
                 left: 8,
                 right: 8,
@@ -231,7 +279,7 @@ export function MetricsChart({
                     <CustomDot
                       key={key}
                       {...restProps}
-                      dataLength={metricsData.length}
+                      dataLength={filteredData.length}
                     />
                   );
                 }}
@@ -246,7 +294,7 @@ export function MetricsChart({
           </ChartContainer>
         ) : (
           <div className="h-[400px] flex items-center justify-center text-muted-foreground">
-            No metrics data available
+            No metrics data available for this time range
           </div>
         )}
       </CardContent>

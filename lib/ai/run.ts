@@ -8,6 +8,9 @@ import { prisma } from "../prisma";
 import { operation, Symbol } from "@prisma/client";
 import { buy } from "../trading/buy";
 import { sell } from "../trading/sell";
+import { validateBuyOrder, validateSellOrder, validateStopLossTakeProfit } from "../trading/validator";
+import { setStopLossTakeProfit } from "../trading/set-stop-loss-take-profit";
+import { randomUUID } from "crypto";
 
 // Map of supported trading symbols
 const SUPPORTED_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"] as const;
@@ -67,6 +70,8 @@ export async function run(initialCapital: number) {
           pricing: z.number().describe("The pricing of you want to buy in."),
           amount: z.number(),
           leverage: z.number().min(1).max(20),
+          stopLoss: z.number().optional().describe("Optional stop loss price to protect the position"),
+          takeProfit: z.number().optional().describe("Optional take profit price to secure gains"),
         })
         .optional()
         .describe("If operation is buy, generate object"),
@@ -84,12 +89,10 @@ export async function run(initialCapital: number) {
         .object({
           stopLoss: z
             .number()
-            .nullable()
             .optional()
             .describe("The stop loss of you want to set."),
           takeProfit: z
             .number()
-            .nullable()
             .optional()
             .describe("The take profit of you want to set."),
         })
@@ -106,6 +109,48 @@ export async function run(initialCapital: number) {
   });
 
   if (object.operation === operation.Buy && object.buy) {
+    // Validate buy order BEFORE execution
+    const validation = validateBuyOrder({
+      symbol: object.symbol,
+      amount: object.buy.amount,
+      leverage: object.buy.leverage,
+      price: object.buy.pricing,
+      availableBalance: accountInformationAndPerformance.availableCash,
+      currentPositions: accountInformationAndPerformance.positions,
+    });
+
+    // Log validation warnings
+    if (validation.warnings.length > 0) {
+      console.warn(`[TRADING] Validation warnings: ${validation.warnings.join(", ")}`);
+    }
+
+    // If validation failed, reject the trade and save audit trail
+    if (!validation.valid) {
+      console.error(`[TRADING] Buy validation failed: ${validation.errors.join(", ")}`);
+
+      await prisma.chat.create({
+        data: {
+          reasoning: reasoning || "<no reasoning>",
+          chat: `REJECTED: ${validation.errors.join(", ")}`,
+          userPrompt,
+          tradings: {
+            createMany: {
+              data: {
+                symbol: SYMBOL_TO_ENUM[object.symbol],
+                operation: object.operation,
+                pricing: object.buy.pricing,
+                amount: object.buy.amount,
+                leverage: object.buy.leverage,
+                success: false,
+                errorMessage: validation.errors.join("; "),
+              },
+            },
+          },
+        },
+      });
+      return; // Exit without executing the trade
+    }
+
     // Execute buy order
     const buyResult = await buy({
       symbol: object.symbol,
@@ -114,90 +159,338 @@ export async function run(initialCapital: number) {
       price: object.buy.pricing,
     });
 
-    // Save to database
-    await prisma.chat.create({
-      data: {
-        reasoning: reasoning || "<no reasoning>",
-        chat: object.chat || "<no chat>",
-        userPrompt,
-        tradings: {
-          createMany: {
-            data: {
-              symbol: SYMBOL_TO_ENUM[object.symbol],
-              operation: object.operation,
-              pricing: buyResult.success ? buyResult.price : object.buy.pricing,
-              amount: object.buy.amount,
-              leverage: object.buy.leverage,
+    // Save to database ONLY after checking execution result
+    if (buyResult.success) {
+      // Generate unique position ID for tracking this position
+      const positionId = randomUUID();
+
+      // Set stop loss and take profit if provided by AI
+      if (object.buy.stopLoss || object.buy.takeProfit) {
+        // Validate SL/TP levels before setting
+        const slTpValidation = validateStopLossTakeProfit({
+          stopLoss: object.buy.stopLoss,
+          takeProfit: object.buy.takeProfit,
+          entryPrice: buyResult.price,
+          side: "long", // BUY orders are always long positions
+        });
+
+        if (slTpValidation.valid) {
+          const slTpResult = await setStopLossTakeProfit({
+            symbol: object.symbol,
+            stopLoss: object.buy.stopLoss,
+            takeProfit: object.buy.takeProfit,
+            positionSize: object.buy.amount / object.buy.leverage, // Contract size
+            side: "long",
+          });
+
+          if (!slTpResult.success) {
+            console.error(`[TRADING] Failed to set SL/TP: ${slTpResult.error}`);
+          } else {
+            console.log(`[TRADING] Stop loss/take profit set successfully`);
+          }
+        } else {
+          console.warn(`[TRADING] Invalid SL/TP levels: ${slTpValidation.errors.join(", ")}`);
+        }
+      }
+
+      await prisma.chat.create({
+        data: {
+          reasoning: reasoning || "<no reasoning>",
+          chat: object.chat || "<no chat>",
+          userPrompt,
+          tradings: {
+            createMany: {
+              data: {
+                symbol: SYMBOL_TO_ENUM[object.symbol],
+                operation: object.operation,
+                pricing: buyResult.price,
+                amount: object.buy.amount,
+                leverage: object.buy.leverage,
+                stopLoss: object.buy.stopLoss,
+                takeProfit: object.buy.takeProfit,
+                positionId: positionId, // Link this trade to the position
+                success: true,
+                errorMessage: null,
+              },
             },
           },
         },
-      },
-    });
-
-    if (!buyResult.success) {
-      console.error(`[TRADING] Buy order failed: ${buyResult.error}`);
+      });
+      console.log(`[TRADING] Buy order executed successfully at ${buyResult.price}, Position ID: ${positionId}`);
     } else {
-      console.log(`[TRADING] Buy order executed successfully at ${buyResult.price}`);
+      // Trade execution failed - save with error details
+      console.error(`[TRADING] Buy order failed: ${buyResult.error}`);
+
+      await prisma.chat.create({
+        data: {
+          reasoning: reasoning || "<no reasoning>",
+          chat: `FAILED: ${buyResult.error}`,
+          userPrompt,
+          tradings: {
+            createMany: {
+              data: {
+                symbol: SYMBOL_TO_ENUM[object.symbol],
+                operation: object.operation,
+                pricing: object.buy.pricing,
+                amount: object.buy.amount,
+                leverage: object.buy.leverage,
+                success: false,
+                errorMessage: buyResult.error,
+              },
+            },
+          },
+        },
+      });
     }
   }
 
   if (object.operation === operation.Sell && object.sell) {
+    // Validate sell order BEFORE execution
+    const validation = validateSellOrder({
+      symbol: object.symbol,
+      percentage: object.sell.percentage,
+      currentPositions: accountInformationAndPerformance.positions,
+    });
+
+    // Log validation warnings
+    if (validation.warnings.length > 0) {
+      console.warn(`[TRADING] Validation warnings: ${validation.warnings.join(", ")}`);
+    }
+
+    // If validation failed, reject the trade and save audit trail
+    if (!validation.valid) {
+      console.error(`[TRADING] Sell validation failed: ${validation.errors.join(", ")}`);
+
+      await prisma.chat.create({
+        data: {
+          reasoning: reasoning || "<no reasoning>",
+          chat: `REJECTED: ${validation.errors.join(", ")}`,
+          userPrompt,
+          tradings: {
+            createMany: {
+              data: {
+                symbol: SYMBOL_TO_ENUM[object.symbol],
+                operation: object.operation,
+                success: false,
+                errorMessage: validation.errors.join("; "),
+              },
+            },
+          },
+        },
+      });
+      return; // Exit without executing the trade
+    }
+
+    // Find the open position's positionId for linking
+    const openPosition = await prisma.trading.findFirst({
+      where: {
+        symbol: SYMBOL_TO_ENUM[object.symbol],
+        operation: "Buy",
+        success: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+      select: {
+        positionId: true,
+      },
+    });
+
     // Execute sell order
     const sellResult = await sell({
       symbol: object.symbol,
       percentage: object.sell.percentage,
     });
 
-    // Save to database
-    await prisma.chat.create({
-      data: {
-        reasoning: reasoning || "<no reasoning>",
-        chat: object.chat || "<no chat>",
-        userPrompt,
-        tradings: {
-          createMany: {
-            data: {
-              symbol: SYMBOL_TO_ENUM[object.symbol],
-              operation: object.operation,
-              pricing: sellResult.success ? sellResult.price : undefined,
+    // Save to database ONLY after checking execution result
+    if (sellResult.success) {
+      await prisma.chat.create({
+        data: {
+          reasoning: reasoning || "<no reasoning>",
+          chat: object.chat || "<no chat>",
+          userPrompt,
+          tradings: {
+            createMany: {
+              data: {
+                symbol: SYMBOL_TO_ENUM[object.symbol],
+                operation: object.operation,
+                pricing: sellResult.price,
+                positionId: openPosition?.positionId || null, // Link to the position
+                success: true,
+                errorMessage: null,
+              },
             },
           },
         },
-      },
-    });
-
-    if (!sellResult.success) {
-      console.error(`[TRADING] Sell order failed: ${sellResult.error}`);
-    } else {
+      });
       console.log(
         `[TRADING] Sell order executed successfully at ${sellResult.price}, PnL: ${sellResult.pnl?.toFixed(2)} USDT`
       );
+    } else {
+      // Trade execution failed - save with error details
+      console.error(`[TRADING] Sell order failed: ${sellResult.error}`);
+
+      await prisma.chat.create({
+        data: {
+          reasoning: reasoning || "<no reasoning>",
+          chat: `FAILED: ${sellResult.error}`,
+          userPrompt,
+          tradings: {
+            createMany: {
+              data: {
+                symbol: SYMBOL_TO_ENUM[object.symbol],
+                operation: object.operation,
+                success: false,
+                errorMessage: sellResult.error,
+              },
+            },
+          },
+        },
+      });
     }
   }
 
   if (object.operation === operation.Hold) {
     const shouldAdjustProfit =
-      object.adjustProfit?.stopLoss && object.adjustProfit?.takeProfit;
-    await prisma.chat.create({
-      data: {
-        reasoning: reasoning || "<no reasoning>",
-        chat: object.chat || "<no chat>",
-        userPrompt,
-        tradings: {
-          createMany: {
-            data: {
-              symbol: SYMBOL_TO_ENUM[object.symbol],
-              operation: object.operation,
-              stopLoss: shouldAdjustProfit
-                ? object.adjustProfit?.stopLoss
-                : undefined,
-              takeProfit: shouldAdjustProfit
-                ? object.adjustProfit?.takeProfit
-                : undefined,
+      object.adjustProfit?.stopLoss || object.adjustProfit?.takeProfit;
+
+    if (shouldAdjustProfit) {
+      // Find the position for the symbol
+      const position = accountInformationAndPerformance.positions.find(
+        (p) => p.symbol === object.symbol && p.contracts !== 0
+      );
+
+      if (!position) {
+        console.error(`[TRADING] Cannot set SL/TP: No open position found for ${object.symbol}`);
+
+        await prisma.chat.create({
+          data: {
+            reasoning: reasoning || "<no reasoning>",
+            chat: `REJECTED: Cannot set stop loss/take profit without open position for ${object.symbol}`,
+            userPrompt,
+            tradings: {
+              createMany: {
+                data: {
+                  symbol: SYMBOL_TO_ENUM[object.symbol],
+                  operation: object.operation,
+                  stopLoss: object.adjustProfit?.stopLoss,
+                  takeProfit: object.adjustProfit?.takeProfit,
+                  success: false,
+                  errorMessage: `No open position for ${object.symbol}`,
+                },
+              },
+            },
+          },
+        });
+        return; // Exit without setting SL/TP
+      }
+
+      // Validate SL/TP levels
+      const slTpValidation = validateStopLossTakeProfit({
+        stopLoss: object.adjustProfit?.stopLoss ?? undefined,
+        takeProfit: object.adjustProfit?.takeProfit ?? undefined,
+        entryPrice: position.entryPrice || position.markPrice || 0,
+        side: position.side === "long" ? "long" : "short",
+      });
+
+      if (!slTpValidation.valid) {
+        console.error(`[TRADING] Invalid SL/TP levels: ${slTpValidation.errors.join(", ")}`);
+
+        await prisma.chat.create({
+          data: {
+            reasoning: reasoning || "<no reasoning>",
+            chat: `REJECTED: ${slTpValidation.errors.join(", ")}`,
+            userPrompt,
+            tradings: {
+              createMany: {
+                data: {
+                  symbol: SYMBOL_TO_ENUM[object.symbol],
+                  operation: object.operation,
+                  stopLoss: object.adjustProfit?.stopLoss,
+                  takeProfit: object.adjustProfit?.takeProfit,
+                  success: false,
+                  errorMessage: slTpValidation.errors.join("; "),
+                },
+              },
+            },
+          },
+        });
+        return; // Exit without setting invalid SL/TP
+      }
+
+      // Set stop loss and take profit on the exchange
+      const slTpResult = await setStopLossTakeProfit({
+        symbol: object.symbol,
+        stopLoss: object.adjustProfit?.stopLoss ?? undefined,
+        takeProfit: object.adjustProfit?.takeProfit ?? undefined,
+        positionSize: position.contracts || 0,
+        side: position.side === "long" ? "long" : "short",
+      });
+
+      if (slTpResult.success) {
+        await prisma.chat.create({
+          data: {
+            reasoning: reasoning || "<no reasoning>",
+            chat: object.chat || "<no chat>",
+            userPrompt,
+            tradings: {
+              createMany: {
+                data: {
+                  symbol: SYMBOL_TO_ENUM[object.symbol],
+                  operation: object.operation,
+                  stopLoss: object.adjustProfit?.stopLoss,
+                  takeProfit: object.adjustProfit?.takeProfit,
+                  success: true,
+                  errorMessage: null,
+                },
+              },
+            },
+          },
+        });
+        console.log(`[TRADING] Stop loss/take profit adjusted successfully for ${object.symbol}`);
+      } else {
+        console.error(`[TRADING] Failed to set SL/TP: ${slTpResult.error}`);
+
+        await prisma.chat.create({
+          data: {
+            reasoning: reasoning || "<no reasoning>",
+            chat: `FAILED: ${slTpResult.error}`,
+            userPrompt,
+            tradings: {
+              createMany: {
+                data: {
+                  symbol: SYMBOL_TO_ENUM[object.symbol],
+                  operation: object.operation,
+                  stopLoss: object.adjustProfit?.stopLoss,
+                  takeProfit: object.adjustProfit?.takeProfit,
+                  success: false,
+                  errorMessage: slTpResult.error,
+                },
+              },
+            },
+          },
+        });
+      }
+    } else {
+      // HOLD without SL/TP adjustment - just log the decision
+      await prisma.chat.create({
+        data: {
+          reasoning: reasoning || "<no reasoning>",
+          chat: object.chat || "<no chat>",
+          userPrompt,
+          tradings: {
+            createMany: {
+              data: {
+                symbol: SYMBOL_TO_ENUM[object.symbol],
+                operation: object.operation,
+                success: true,
+                errorMessage: null,
+              },
             },
           },
         },
-      },
-    });
+      });
+      console.log(`[TRADING] Holding positions, no action taken`);
+    }
   }
 }
