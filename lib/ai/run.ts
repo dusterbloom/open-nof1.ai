@@ -29,20 +29,25 @@ const SYMBOL_TO_ENUM: Record<string, Symbol> = {
  * you can interval trading using cron job
  */
 export async function run(initialCapital: number) {
-  // In dry-run mode, ensure wallet state is restored from database
+  // In dry-run mode, ALWAYS restore wallet state from database to ensure consistency
+  // This guarantees accurate state even after container restarts or server crashes
   if (isDryRunMode()) {
-    const currentBalance = dryRunWallet.getBalance();
-    const currentPnL = dryRunWallet.getTotalPnL();
-    const positions = dryRunWallet.getPositions();
-    const startMoney = Number(process.env.START_MONEY) || 10000;
+    console.log("[RUN] Dry-run mode: Restoring wallet state from database...");
+    const beforeState = {
+      balance: dryRunWallet.getBalance(),
+      pnl: dryRunWallet.getTotalPnL(),
+      positions: dryRunWallet.getPositions().length,
+    };
 
-    // Check if wallet appears uninitialized
-    const walletAppearsUninitialized = currentBalance === startMoney && currentPnL === 0 && positions.length === 0;
+    await restoreDryRunWallet();
 
-    if (walletAppearsUninitialized) {
-      console.log("[RUN] Wallet appears uninitialized, restoring from database...");
-      await restoreDryRunWallet();
-    }
+    const afterState = {
+      balance: dryRunWallet.getBalance(),
+      pnl: dryRunWallet.getTotalPnL(),
+      positions: dryRunWallet.getPositions().length,
+    };
+
+    console.log(`[RUN] Restoration complete: ${beforeState.balance} → ${afterState.balance} USDT, P&L: ${afterState.pnl.toFixed(2)} USDT`);
   }
 
   // Fetch market data for all supported cryptocurrencies
@@ -83,7 +88,8 @@ export async function run(initialCapital: number) {
       operation: z.nativeEnum(operation),
       symbol: z
         .enum(["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"])
-        .describe("The cryptocurrency symbol to trade. Choose based on market analysis and opportunities."),
+        .optional()
+        .describe("The cryptocurrency symbol to trade (required for Buy/Sell operations, optional for Hold when no positions exist)."),
       buy: z
         .object({
           pricing: z.number().describe("The pricing of you want to buy in."),
@@ -514,7 +520,7 @@ export async function run(initialCapital: number) {
           tradings: {
             createMany: {
               data: {
-                symbol: SYMBOL_TO_ENUM[object.symbol],
+                symbol: object.symbol ? SYMBOL_TO_ENUM[object.symbol] : null,
                 operation: object.operation,
                 success: true,
                 errorMessage: null,
@@ -523,7 +529,11 @@ export async function run(initialCapital: number) {
           },
         },
       });
-      console.log(`[TRADING] Holding positions, no action taken`);
+      console.log(
+        object.symbol
+          ? `[TRADING] Holding ${object.symbol} position, no action taken`
+          : `[TRADING] Hold operation - no positions, waiting for opportunities`
+      );
     }
   }
 }

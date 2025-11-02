@@ -88,14 +88,21 @@ FOR SELL:
   }
 }
 
-FOR HOLD:
+FOR HOLD (with open positions):
 {
   "operation": "Hold",
   "symbol": "BTC/USDT",
-  "chat": "Position Check: ... explanation"
+  "chat": "Position Check: BTC +3%, within safe hold range. Holding position."
+}
+
+FOR HOLD (no open positions):
+{
+  "operation": "Hold",
+  "chat": "Position Check: No open positions. Market conditions not favorable for entry (RSI overbought, etc). Waiting."
 }
 
 **IMPORTANT: Do NOT include "buy" or "sell" objects when operation is "Hold"!**
+**IMPORTANT: Symbol is optional for Hold when you have no positions. Omit it if not managing a specific position.**
 
 **Critical for "chat" field:**
 Your analysis MUST start with: "Position Check: [summary of each open position's PnL%]. Based on profit-taking rules: [your decision]..."
@@ -107,11 +114,13 @@ GOOD: "Position Check: BTC +12%, ETH +8%, SOL +3%. BTC hit +12% profit trigger. 
 BAD: "Market analysis shows mixed signals with RSI at 55 and MACD neutral. Holding positions." ← This ignores position management!
 
 **Rules:**
-- "symbol": Which coin to trade (or which position to sell/hold)
+- "symbol":
+  - REQUIRED for Buy and Sell operations
+  - OPTIONAL for Hold: include it only if holding a specific position, omit if you have no positions
 - "operation":
   - "Sell": When taking profits, cutting losses, or trailing stop hit (include "sell" object)
   - "Buy": Only after checking positions and if you have capital/room (include "buy" object)
-  - "Hold": Only if all positions are between -2% and +5% AND no good new setups (DO NOT include "buy" or "sell" objects!)
+  - "Hold": If all positions are between -2% and +5% AND no good new setups (DO NOT include "buy" or "sell" objects!)
 - "sell.percentage": 50 or 100 (50% for +10% profit, 100% for +15% profit or -5% loss)
 - "buy.leverage": 1-5 (use 5x for high conviction, 1x for uncertain)
 - "chat": MUST explain position PnL check first, then decision reasoning

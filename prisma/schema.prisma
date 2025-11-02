@@ -38,7 +38,7 @@ model Chat {
 model Trading {
   id String @id @default(uuid())
 
-  symbol     Symbol
+  symbol     Symbol?   // Optional: null for Hold operations with no positions
   operation  operation
   leverage   Int?
   amount     Float?
