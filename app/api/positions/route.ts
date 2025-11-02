@@ -19,106 +19,31 @@ export const GET = async () => {
 
     // Get positions from dry-run wallet
     let positions = dryRunWallet.getPositions();
-    console.log("[POSITIONS] Current wallet positions:", positions.length);
+    const currentBalance = dryRunWallet.getBalance();
+    const currentPnL = dryRunWallet.getTotalPnL();
+    console.log("[POSITIONS] Current wallet state:");
+    console.log(`[POSITIONS]   Balance: ${currentBalance}`);
+    console.log(`[POSITIONS]   Total P&L: ${currentPnL}`);
+    console.log(`[POSITIONS]   Positions: ${positions.length}`);
 
-    // If wallet is empty, try to restore positions from database
-    if (positions.length === 0) {
-      console.log("[POSITIONS] Wallet is empty, attempting to restore from database...");
+    // If wallet appears uninitialized (balance = initial AND pnl = 0 AND no positions), restore from database
+    const startMoney = Number(process.env.START_MONEY) || 10000;
+    const walletAppearsUninitialized = currentBalance === startMoney && currentPnL === 0 && positions.length === 0;
 
-      // Get all BUY trades (both with and without positionId for legacy support)
-      const buyTrades = await prisma.trading.findMany({
-        where: {
-          operation: "Buy",
-          success: true, // Only successful trades
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-      });
-      console.log(`[POSITIONS] Found ${buyTrades.length} successful BUY trades to check`);
+    if (walletAppearsUninitialized) {
+      console.log("[POSITIONS] Wallet appears uninitialized, attempting full restoration from database...");
 
-      // Track which symbols we've already restored (only one position per symbol allowed)
-      const restoredSymbols = new Set<string>();
+      const { restoreDryRunWallet } = await import("@/lib/trading/restore-dry-run-wallet");
+      const restorationResult = await restoreDryRunWallet();
 
-      // For each buy trade, check if the position has been fully closed
-      for (const trade of buyTrades) {
-        // Skip if we've already restored a position for this symbol
-        if (restoredSymbols.has(trade.symbol)) {
-          console.log(`[POSITIONS] Skipping ${trade.symbol} @ ${trade.pricing} - already restored more recent position`);
-          continue;
-        }
-
-        const tradeLabel = trade.positionId || `legacy-${trade.symbol}-${trade.createdAt.toISOString()}`;
-        console.log(`[POSITIONS] Checking trade: ${tradeLabel}`);
-        console.log(`[POSITIONS]   Symbol: ${trade.symbol}, Amount: ${trade.amount}, Price: ${trade.pricing}`);
-
-        let sellTrade;
-
-        if (trade.positionId) {
-          // New method: Match by positionId (preferred)
-          console.log(`[POSITIONS]   Using positionId matching for ${trade.positionId}`);
-          sellTrade = await prisma.trading.findFirst({
-            where: {
-              operation: "Sell",
-              positionId: trade.positionId,
-              success: true,
-            },
-          });
-        } else {
-          // Legacy method: Match by symbol and time (for trades without positionId)
-          console.log(`[POSITIONS]   Using legacy symbol+time matching for ${trade.symbol}`);
-          sellTrade = await prisma.trading.findFirst({
-            where: {
-              operation: "Sell",
-              symbol: trade.symbol,
-              success: true,
-              createdAt: {
-                gt: trade.createdAt, // SELL must be after BUY
-              },
-            },
-            orderBy: {
-              createdAt: "asc", // Get the earliest SELL after this BUY
-            },
-          });
-        }
-
-        if (sellTrade) {
-          console.log(`[POSITIONS]   ❌ Position closed by SELL at ${sellTrade.createdAt.toISOString()}`);
-        } else {
-          console.log(`[POSITIONS]   ✅ No SELL found - position appears open`);
-        }
-
-        // If no sell trade found, position is still open - restore it
-        if (!sellTrade && trade.amount && trade.pricing) {
-          const positionLabel = trade.positionId || `legacy-${trade.symbol}`;
-          console.log(`[POSITIONS] Restoring position ${positionLabel} for ${trade.symbol}`);
-
-          // Restore position to wallet by simulating the buy
-          const { buy } = await import("@/lib/trading/buy");
-          try {
-            const result = await buy({
-              symbol: `${trade.symbol}/USDT`,
-              size: trade.amount,
-              leverage: trade.leverage || 1,
-              price: trade.pricing,
-            });
-
-            if (result.success) {
-              console.log(`[POSITIONS] Successfully restored ${trade.symbol} position`);
-              // Mark this symbol as restored so we skip older positions
-              restoredSymbols.add(trade.symbol);
-            } else {
-              console.log(`[POSITIONS] Failed to restore: ${result.error}`);
-            }
-          } catch (error) {
-            console.log(`[POSITIONS] Exception during restore: ${error}`);
-          }
-        }
-      }
+      console.log(`[POSITIONS] Restoration complete:`);
+      console.log(`[POSITIONS]   Balance: ${restorationResult.balance.toFixed(2)} USDT`);
+      console.log(`[POSITIONS]   Total P&L: ${restorationResult.totalPnL.toFixed(2)} USDT`);
+      console.log(`[POSITIONS]   Open Positions: ${restorationResult.openPositions}`);
+      console.log(`[POSITIONS]   Trades Processed: ${restorationResult.tradesProcessed}`);
 
       // Refresh positions after restoration
       positions = dryRunWallet.getPositions();
-      console.log(`[POSITIONS] Restored ${positions.length} positions from database`);
     }
 
     // Fetch current prices to calculate unrealized PnL

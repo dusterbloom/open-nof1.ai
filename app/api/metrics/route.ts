@@ -1,16 +1,24 @@
 import { prisma } from "@/lib/prisma";
 import { ModelType } from "@prisma/client";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { MetricData } from "@/lib/types/metrics";
 
-// 最大返回数据点数量
-const MAX_DATA_POINTS = 50;
+/**
+ * Intelligent downsampling based on time range
+ * - ALL: 50 points (wide view)
+ * - 72H: 100 points (3 days detail)
+ * - 24H: 200 points (1 day high detail)
+ * - 1H: No downsampling (maximum detail)
+ */
+const SAMPLE_SIZE_BY_RANGE: Record<string, number> = {
+  ALL: 50,
+  "72H": 100,
+  "24H": 200,
+  "1H": 1000, // Effectively no downsampling for 1 hour
+};
 
 /**
- * 从数组中均匀采样指定数量的元素
- * @param data - 原始数据数组
- * @param sampleSize - 需要采样的数量
- * @returns 均匀分布的采样数据
+ * Uniformly sample array, keeping first and last elements
  */
 function uniformSample<T>(data: T[], sampleSize: number): T[] {
   if (data.length <= sampleSize) {
@@ -28,8 +36,30 @@ function uniformSample<T>(data: T[], sampleSize: number): T[] {
   return result;
 }
 
-export const GET = async () => {
+/**
+ * Calculate time cutoff for filtering metrics
+ */
+function getTimeCutoff(range: string): Date | null {
+  const now = new Date();
+  switch (range) {
+    case "1H":
+      return new Date(now.getTime() - 60 * 60 * 1000);
+    case "24H":
+      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    case "72H":
+      return new Date(now.getTime() - 72 * 60 * 60 * 1000);
+    case "ALL":
+    default:
+      return null; // No time filtering
+  }
+}
+
+export const GET = async (request: NextRequest) => {
   try {
+    // Get time range from query parameter (default: ALL)
+    const { searchParams } = new URL(request.url);
+    const range = searchParams.get("range") || "ALL";
+
     const metrics = await prisma.metrics.findFirst({
       where: {
         model: ModelType.Deepseek,
@@ -41,6 +71,8 @@ export const GET = async () => {
         data: {
           metrics: [],
           totalCount: 0,
+          filteredCount: 0,
+          range,
         },
         success: true,
       });
@@ -49,28 +81,50 @@ export const GET = async () => {
     const databaseMetrics = metrics.metrics as unknown as {
       createdAt: string;
       accountInformationAndPerformance: MetricData[];
+      reason?: string;
+      tradeId?: string;
     }[];
 
-    const metricsData = databaseMetrics
+    // Transform metrics data
+    let metricsData = databaseMetrics
       .map((item) => {
         return {
           ...item.accountInformationAndPerformance,
           createdAt: item?.createdAt || new Date().toISOString(),
+          reason: item?.reason,
+          tradeId: item?.tradeId,
         };
       })
       .filter((item) => (item as unknown as MetricData).availableCash > 0);
 
-    // 均匀采样数据，最多返回 MAX_DATA_POINTS 条
-    const sampledMetrics = uniformSample(metricsData, MAX_DATA_POINTS);
+    const totalCount = metricsData.length;
+
+    // STEP 1: Filter by time range FIRST (before downsampling)
+    const timeCutoff = getTimeCutoff(range);
+    if (timeCutoff) {
+      metricsData = metricsData.filter((item) => {
+        const itemDate = new Date(item.createdAt);
+        return itemDate >= timeCutoff;
+      });
+    }
+
+    const filteredCount = metricsData.length;
+
+    // STEP 2: Apply intelligent downsampling based on selected range
+    const sampleSize = SAMPLE_SIZE_BY_RANGE[range] || SAMPLE_SIZE_BY_RANGE.ALL;
+    const sampledMetrics = uniformSample(metricsData, sampleSize);
 
     console.log(
-      `📊 Total metrics: ${metricsData.length}, Sampled: ${sampledMetrics.length}`
+      `📊 [METRICS API] Range: ${range}, Total: ${totalCount}, Filtered: ${filteredCount}, Sampled: ${sampledMetrics.length}`
     );
 
     return NextResponse.json({
       data: {
         metrics: sampledMetrics,
-        totalCount: metricsData.length,
+        totalCount,
+        filteredCount,
+        sampledCount: sampledMetrics.length,
+        range,
         model: metrics?.model || ModelType.Deepseek,
         name: metrics?.name || "Deepseek Trading Bot",
         createdAt: metrics?.createdAt || new Date().toISOString(),
@@ -84,6 +138,9 @@ export const GET = async () => {
       data: {
         metrics: [],
         totalCount: 0,
+        filteredCount: 0,
+        sampledCount: 0,
+        range: "ALL",
         model: ModelType.Deepseek,
         name: "Deepseek Trading Bot",
         createdAt: new Date().toISOString(),

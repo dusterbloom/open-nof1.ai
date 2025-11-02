@@ -175,30 +175,36 @@ export async function getCurrentMarketState(
     const current_rsi = Number(rsi7_1m[rsi7_1m.length - 1]) || 0;
 
     // Fetch open interest and funding rate for perpetual futures
-    // Skip in dry-run mode (Spot API doesn't have these)
+    // These are public data, so we fetch them even in dry-run mode for realistic AI context
     const openInterestData = { latest: 0, average: 0 };
     let fundingRate = 0;
 
-    if (!isDryRunMode()) {
-      try {
-        // Try to fetch open interest (futures only)
-        const perpSymbol = normalizedSymbol.replace("/", "");
-        const openInterest = await binance.fetchOpenInterest(perpSymbol);
+    try {
+      // Create a futures exchange instance for public data (no auth required)
+      const ccxt = require("ccxt");
+      const futuresExchange = new ccxt.binance({
+        options: {
+          defaultType: "future",
+        },
+      });
 
-        if (openInterest && typeof openInterest.openInterestAmount === "number") {
-          openInterestData.latest = openInterest.openInterestAmount;
-          openInterestData.average = openInterest.openInterestAmount; // Using same value as average
-        }
+      // Fetch open interest (futures only)
+      const perpSymbol = normalizedSymbol.replace("/", "");
+      const openInterest = await futuresExchange.fetchOpenInterest(perpSymbol);
 
-        // Try to fetch funding rate (futures only)
-        const fundingRates = await binance.fetchFundingRate(normalizedSymbol);
-        if (fundingRates && typeof fundingRates.fundingRate === "number") {
-          fundingRate = fundingRates.fundingRate;
-        }
-      } catch (error) {
-        console.warn("Could not fetch open interest or funding rate:", error);
-        // Continue with default values
+      if (openInterest && typeof openInterest.openInterestAmount === "number") {
+        openInterestData.latest = openInterest.openInterestAmount;
+        openInterestData.average = openInterest.openInterestAmount; // Using same value as average
       }
+
+      // Fetch funding rate (futures only)
+      const fundingRates = await futuresExchange.fetchFundingRate(normalizedSymbol);
+      if (fundingRates && typeof fundingRates.fundingRate === "number") {
+        fundingRate = fundingRates.fundingRate;
+      }
+    } catch (error) {
+      console.warn(`Could not fetch open interest or funding rate for ${normalizedSymbol}:`, error);
+      // Continue with default values (0)
     }
 
     // Calculate average volume for 4-hour timeframe

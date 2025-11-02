@@ -133,12 +133,17 @@ const CustomDot = (props: CustomDotProps) => {
 };
 
 export function MetricsChart({
-  metricsData,
-  loading,
-  totalCount,
+  metricsData: initialMetricsData,
+  loading: initialLoading,
+  totalCount: initialTotalCount,
 }: MetricsChartProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>("ALL");
   const [trades, setTrades] = useState<Trade[]>([]);
+
+  // Local state for metrics (will be refetched when timeRange changes)
+  const [metricsData, setMetricsData] = useState<MetricData[]>(initialMetricsData);
+  const [loading, setLoading] = useState(initialLoading);
+  const [totalCount, setTotalCount] = useState(initialTotalCount);
 
   // Zoom state
   const [yZoom, setYZoom] = useState(1);
@@ -151,6 +156,27 @@ export function MetricsChart({
   const [selectedSymbols, setSelectedSymbols] = useState<Set<TradeSymbol>>(new Set(["BTC", "ETH", "BNB", "SOL", "DOGE"]));
   const [profitabilityFilter, setProfitabilityFilter] = useState<"all" | "profitable" | "losing">("all");
   const [tradeTypeFilter, setTradeTypeFilter] = useState<Set<TradeOperation>>(new Set(["Buy", "Sell", "Hold"]));
+
+  // Fetch metrics data with range parameter
+  useEffect(() => {
+    const fetchMetrics = async () => {
+      try {
+        setLoading(true);
+        const response = await fetch(`/api/metrics?range=${timeRange}`);
+        const result = await response.json();
+        if (result.success && result.data) {
+          setMetricsData(result.data.metrics || []);
+          setTotalCount(result.data.filteredCount || 0);
+          console.log(`[METRICS CHART] Fetched ${result.data.metrics.length} metrics for range: ${timeRange}`);
+        }
+      } catch (error) {
+        console.error("Failed to fetch metrics:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchMetrics();
+  }, [timeRange]);
 
   // Fetch trades data
   useEffect(() => {
@@ -168,27 +194,8 @@ export function MetricsChart({
     fetchTrades();
   }, []);
 
-  // Filter data based on selected time range
-  const filteredData = useMemo(() => {
-    if (timeRange === "ALL") {
-      return metricsData;
-    }
-
-    const now = new Date();
-    const hoursMap = {
-      "1H": 1,
-      "24H": 24,
-      "72H": 72,
-    };
-
-    const hours = hoursMap[timeRange];
-    const cutoffTime = new Date(now.getTime() - hours * 60 * 60 * 1000);
-
-    return metricsData.filter((metric) => {
-      const metricTime = new Date(metric.createdAt);
-      return metricTime >= cutoffTime;
-    });
-  }, [metricsData, timeRange]);
+  // No need for client-side time filtering anymore - handled by API
+  const filteredData = metricsData;
 
   // Filter trades based on user filters
   const filteredTrades = useMemo(() => {
@@ -321,14 +328,15 @@ export function MetricsChart({
       }
 
       e.preventDefault();
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
+      // More aggressive zoom: 15% per scroll instead of 10%
+      const delta = e.deltaY > 0 ? 0.85 : 1.15;
 
       if (e.shiftKey) {
-        // X-axis zoom
-        setXZoom(prev => Math.max(0.1, Math.min(10, prev * delta)));
+        // X-axis zoom (wide range for both in and out)
+        setXZoom(prev => Math.max(0.01, Math.min(20, prev * delta)));
       } else {
-        // Y-axis zoom
-        setYZoom(prev => Math.max(0.1, Math.min(10, prev * delta)));
+        // Y-axis zoom (extreme range: 0.01x - 500x for both micro and macro views)
+        setYZoom(prev => Math.max(0.01, Math.min(500, prev * delta)));
       }
     };
 
@@ -516,8 +524,15 @@ export function MetricsChart({
 
         {/* Chart Controls */}
         <div className="mb-2 flex items-center justify-between">
-          <div className="text-xs text-muted-foreground">
-            Scroll: Y-axis zoom • Shift+Scroll: X-axis zoom
+          <div className="flex items-center gap-4">
+            <div className="text-xs text-muted-foreground">
+              Scroll: Y-axis zoom • Shift+Scroll: X-axis zoom
+            </div>
+            {(yZoom !== 1 || xZoom !== 1) && (
+              <div className="text-xs font-mono text-blue-600 dark:text-blue-400">
+                Y: {yZoom.toFixed(1)}x {xZoom !== 1 && `• X: ${xZoom.toFixed(1)}x`}
+              </div>
+            )}
           </div>
           <Button
             onClick={resetZoom}

@@ -11,6 +11,9 @@ import { sell } from "../trading/sell";
 import { validateBuyOrder, validateSellOrder, validateStopLossTakeProfit } from "../trading/validator";
 import { setStopLossTakeProfit } from "../trading/set-stop-loss-take-profit";
 import { randomUUID } from "crypto";
+import { isDryRunMode, dryRunWallet } from "../trading/dry-run-wallet";
+import { restoreDryRunWallet } from "../trading/restore-dry-run-wallet";
+import { collectMetrics } from "../metrics/collect-metrics";
 
 // Map of supported trading symbols
 const SUPPORTED_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"] as const;
@@ -26,6 +29,22 @@ const SYMBOL_TO_ENUM: Record<string, Symbol> = {
  * you can interval trading using cron job
  */
 export async function run(initialCapital: number) {
+  // In dry-run mode, ensure wallet state is restored from database
+  if (isDryRunMode()) {
+    const currentBalance = dryRunWallet.getBalance();
+    const currentPnL = dryRunWallet.getTotalPnL();
+    const positions = dryRunWallet.getPositions();
+    const startMoney = Number(process.env.START_MONEY) || 10000;
+
+    // Check if wallet appears uninitialized
+    const walletAppearsUninitialized = currentBalance === startMoney && currentPnL === 0 && positions.length === 0;
+
+    if (walletAppearsUninitialized) {
+      console.log("[RUN] Wallet appears uninitialized, restoring from database...");
+      await restoreDryRunWallet();
+    }
+  }
+
   // Fetch market data for all supported cryptocurrencies
   const marketStates = await Promise.all(
     SUPPORTED_SYMBOLS.map(async (symbol) => ({
@@ -217,6 +236,13 @@ export async function run(initialCapital: number) {
         },
       });
       console.log(`[TRADING] Buy order executed successfully at ${buyResult.price}, Position ID: ${positionId}`);
+
+      // Collect metrics snapshot immediately after successful trade
+      await collectMetrics({
+        initialCapital: initialCapital,
+        reason: "trade",
+        tradeId: positionId,
+      });
     } else {
       // Trade execution failed - save with error details
       console.error(`[TRADING] Buy order failed: ${buyResult.error}`);
@@ -326,6 +352,13 @@ export async function run(initialCapital: number) {
       console.log(
         `[TRADING] Sell order executed successfully at ${sellResult.price}, PnL: ${sellResult.pnl?.toFixed(2)} USDT`
       );
+
+      // Collect metrics snapshot immediately after successful trade
+      await collectMetrics({
+        initialCapital: initialCapital,
+        reason: "trade",
+        tradeId: openPosition?.positionId || undefined,
+      });
     } else {
       // Trade execution failed - save with error details
       console.error(`[TRADING] Sell order failed: ${sellResult.error}`);
