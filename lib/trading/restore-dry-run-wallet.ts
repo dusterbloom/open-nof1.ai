@@ -59,9 +59,12 @@ export async function restoreDryRunWallet(): Promise<{
   for (const trade of allTrades) {
     if (trade.operation === "Buy") {
       // Open position
-      if (trade.amount && trade.pricing && trade.leverage && trade.positionId) {
+      if (trade.amount && trade.pricing && trade.leverage && trade.positionId && trade.symbol) {
+        // Convert database Symbol enum (BTC, ETH) to trading pair format (BTC/USDT, ETH/USDT)
+        const tradingPairSymbol = `${trade.symbol}/USDT`;
+
         const result = dryRunWallet.openPosition({
-          symbol: trade.symbol,
+          symbol: tradingPairSymbol,
           side: "long",
           size: trade.amount,
           price: trade.pricing,
@@ -70,7 +73,7 @@ export async function restoreDryRunWallet(): Promise<{
 
         if (result.success) {
           positions.set(trade.positionId, {
-            symbol: trade.symbol,
+            symbol: tradingPairSymbol, // Use trading pair format for consistency
             size: trade.amount,
             entryPrice: trade.pricing,
             leverage: trade.leverage,
