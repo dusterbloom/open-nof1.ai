@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
+import { useState, useMemo, useEffect, useRef } from "react";
+import { CartesianGrid, Line, LineChart, XAxis, YAxis, ReferenceLine, ReferenceDot } from "recharts";
 import {
   Card,
   CardContent,
@@ -14,6 +14,10 @@ import {
   ChartContainer,
   ChartTooltip,
 } from "@/components/ui/chart";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { MetricData } from "@/lib/types/metrics";
 import { ArcticonsDeepseek } from "@/lib/icons";
 
@@ -25,6 +29,30 @@ interface MetricsChartProps {
 }
 
 type TimeRange = "ALL" | "72H" | "24H" | "1H";
+
+// Trade types from Prisma schema
+type TradeOperation = "Buy" | "Sell" | "Hold";
+type TradeSymbol = "BTC" | "ETH" | "BNB" | "SOL" | "DOGE";
+
+interface Trade {
+  id: string;
+  symbol: TradeSymbol;
+  operation: TradeOperation;
+  amount: number | null;
+  pricing: number | null;
+  leverage: number | null;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  positionId: string | null;
+  success: boolean;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  chat?: {
+    reasoning: string;
+    chat: string;
+  };
+}
 
 const chartConfig = {
   totalCashValue: {
@@ -110,6 +138,35 @@ export function MetricsChart({
   totalCount,
 }: MetricsChartProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>("ALL");
+  const [trades, setTrades] = useState<Trade[]>([]);
+
+  // Zoom state
+  const [yZoom, setYZoom] = useState(1);
+  const [xZoom, setXZoom] = useState(1);
+  const chartRef = useRef<HTMLDivElement>(null);
+
+  // Filter state
+  const [showPositions, setShowPositions] = useState(true);
+  const [showTrades, setShowTrades] = useState(true);
+  const [selectedSymbols, setSelectedSymbols] = useState<Set<TradeSymbol>>(new Set(["BTC", "ETH", "BNB", "SOL", "DOGE"]));
+  const [profitabilityFilter, setProfitabilityFilter] = useState<"all" | "profitable" | "losing">("all");
+  const [tradeTypeFilter, setTradeTypeFilter] = useState<Set<TradeOperation>>(new Set(["Buy", "Sell", "Hold"]));
+
+  // Fetch trades data
+  useEffect(() => {
+    const fetchTrades = async () => {
+      try {
+        const response = await fetch("/api/trades");
+        const result = await response.json();
+        if (result.success) {
+          setTrades(result.data);
+        }
+      } catch (error) {
+        console.error("Failed to fetch trades:", error);
+      }
+    };
+    fetchTrades();
+  }, []);
 
   // Filter data based on selected time range
   const filteredData = useMemo(() => {
@@ -132,6 +189,196 @@ export function MetricsChart({
       return metricTime >= cutoffTime;
     });
   }, [metricsData, timeRange]);
+
+  // Filter trades based on user filters
+  const filteredTrades = useMemo(() => {
+    return trades.filter(trade => {
+      // Symbol filter
+      if (!selectedSymbols.has(trade.symbol)) return false;
+
+      // Trade type filter
+      if (!tradeTypeFilter.has(trade.operation)) return false;
+
+      // Profitability filter (requires position matching)
+      if (profitabilityFilter !== "all" && trade.positionId) {
+        const openTrade = trades.find(t => t.positionId === trade.positionId && t.operation === "Buy");
+        const closeTrade = trades.find(t => t.positionId === trade.positionId && t.operation === "Sell");
+
+        if (openTrade && closeTrade && openTrade.pricing && closeTrade.pricing) {
+          const isProfitable = closeTrade.pricing > openTrade.pricing;
+          if (profitabilityFilter === "profitable" && !isProfitable) return false;
+          if (profitabilityFilter === "losing" && isProfitable) return false;
+        }
+      }
+
+      return true;
+    });
+  }, [trades, selectedSymbols, profitabilityFilter, tradeTypeFilter]);
+
+  // Calculate position lines (entry/exit pairs)
+  const positionLines = useMemo(() => {
+    if (!showPositions) return [];
+
+    const lines: Array<{
+      positionId: string;
+      entry: Trade;
+      exit: Trade | null;
+    }> = [];
+
+    const positionMap = new Map<string, { entry: Trade | null; exit: Trade | null }>();
+
+    filteredTrades.forEach(trade => {
+      if (!trade.positionId) return;
+
+      if (!positionMap.has(trade.positionId)) {
+        positionMap.set(trade.positionId, { entry: null, exit: null });
+      }
+
+      const position = positionMap.get(trade.positionId)!;
+
+      if (trade.operation === "Buy") {
+        position.entry = trade;
+      } else if (trade.operation === "Sell") {
+        position.exit = trade;
+      }
+    });
+
+    positionMap.forEach((position, positionId) => {
+      if (position.entry) {
+        lines.push({
+          positionId,
+          entry: position.entry,
+          exit: position.exit,
+        });
+      }
+    });
+
+    return lines;
+  }, [filteredTrades, showPositions]);
+
+  // Apply X-axis zoom by filtering data (Recharts doesn't support domain on categorical X-axis)
+  const zoomFilteredData = useMemo(() => {
+    if (xZoom === 1) return filteredData;
+
+    const totalPoints = filteredData.length;
+    const visiblePoints = Math.ceil(totalPoints / xZoom);
+    const startIndex = Math.floor((totalPoints - visiblePoints) / 2);
+
+    return filteredData.slice(startIndex, startIndex + visiblePoints);
+  }, [filteredData, xZoom]);
+
+  // Calculate trade dots (map to chart coordinates using zoomFilteredData)
+  const tradeDots = useMemo(() => {
+    if (!showTrades) return [];
+    if (zoomFilteredData.length === 0) return [];
+
+    return filteredTrades
+      .map(trade => {
+        // Find the closest metric data point in zoomFilteredData
+        const tradeTime = new Date(trade.createdAt).getTime();
+        let closestMetric = zoomFilteredData[0];
+        let minDiff = Math.abs(new Date(zoomFilteredData[0]?.createdAt || 0).getTime() - tradeTime);
+
+        zoomFilteredData.forEach(metric => {
+          const diff = Math.abs(new Date(metric.createdAt).getTime() - tradeTime);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closestMetric = metric;
+          }
+        });
+
+        return {
+          createdAt: closestMetric.createdAt,  // Use metric timestamp for exact x-coordinate match
+          totalCashValue: closestMetric?.totalCashValue || 0,
+          operation: trade.operation,
+          symbol: trade.symbol,
+          leverage: trade.leverage,
+          trade,
+        };
+      });
+  }, [filteredTrades, zoomFilteredData, showTrades]);
+
+  // Calculate dynamic Y-axis domain
+  const yDomain = useMemo(() => {
+    if (zoomFilteredData.length === 0) return [0, 50000];
+
+    const values = zoomFilteredData.map(d => d.totalCashValue);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const padding = (max - min) * 0.1 / yZoom;
+
+    return [
+      Math.max(0, min - padding),
+      max + padding
+    ];
+  }, [zoomFilteredData, yZoom]);
+
+  // Handle mouse wheel zoom
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+      if (!chartRef.current?.contains(e.target as Node)) {
+        return;
+      }
+
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? 0.9 : 1.1;
+
+      if (e.shiftKey) {
+        // X-axis zoom
+        setXZoom(prev => Math.max(0.1, Math.min(10, prev * delta)));
+      } else {
+        // Y-axis zoom
+        setYZoom(prev => Math.max(0.1, Math.min(10, prev * delta)));
+      }
+    };
+
+    const chartElement = chartRef.current;
+
+    // Only add listener if element exists
+    if (!chartElement) {
+      return;
+    }
+
+    chartElement.addEventListener("wheel", handleWheel, { passive: false });
+
+    return () => {
+      if (chartElement) {
+        chartElement.removeEventListener("wheel", handleWheel);
+      }
+    };
+  }, [filteredData.length]); // Re-run when data changes to ensure element exists
+
+  // Reset zoom
+  const resetZoom = () => {
+    setYZoom(1);
+    setXZoom(1);
+  };
+
+  // Toggle symbol
+  const toggleSymbol = (symbol: TradeSymbol) => {
+    setSelectedSymbols(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(symbol)) {
+        newSet.delete(symbol);
+      } else {
+        newSet.add(symbol);
+      }
+      return newSet;
+    });
+  };
+
+  // Toggle trade type
+  const toggleTradeType = (type: TradeOperation) => {
+    setTradeTypeFilter(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(type)) {
+        newSet.delete(type);
+      } else {
+        newSet.add(type);
+      }
+      return newSet;
+    });
+  };
 
   if (loading) {
     return (
@@ -178,120 +425,280 @@ export function MetricsChart({
         </div>
       </CardHeader>
       <CardContent className="px-2 sm:px-4 pb-4">
-        {filteredData.length > 0 ? (
-          <ChartContainer
-            config={chartConfig}
-            className="aspect-auto h-[400px] w-full"
-          >
-            <LineChart
-              accessibilityLayer
-              data={filteredData}
-              margin={{
-                left: 8,
-                right: 8,
-                top: 8,
-                bottom: 8,
-              }}
-            >
-              <CartesianGrid vertical={false} />
-              <XAxis
-                dataKey="createdAt"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={6}
-                minTickGap={50}
-                tick={{ fontSize: 11 }}
-                tickFormatter={(value) => {
-                  const date = new Date(value);
-                  return date.toLocaleTimeString("en-US", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  });
-                }}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                tickMargin={6}
-                width={70}
-                tick={{ fontSize: 11 }}
-                domain={[0, 50000]}
-                tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
-              />
-              <ChartTooltip
-                content={({ active, payload }) => {
-                  if (!active || !payload || !payload.length) {
-                    return null;
-                  }
+        {/* Filter Panel */}
+        <div className="mb-4 p-4 border rounded-lg bg-muted/30">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {/* Toggles */}
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Display</Label>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="show-positions"
+                  checked={showPositions}
+                  onCheckedChange={setShowPositions}
+                />
+                <Label htmlFor="show-positions" className="text-xs cursor-pointer">
+                  Position Lines
+                </Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="show-trades"
+                  checked={showTrades}
+                  onCheckedChange={setShowTrades}
+                />
+                <Label htmlFor="show-trades" className="text-xs cursor-pointer">
+                  Trade Dots
+                </Label>
+              </div>
+            </div>
 
-                  const data = payload[0].payload as MetricData;
-                  const date = new Date(data.createdAt);
+            {/* Symbol Filter */}
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Symbols</Label>
+              <div className="flex flex-wrap gap-2">
+                {(["BTC", "ETH", "SOL", "BNB", "DOGE"] as TradeSymbol[]).map((symbol) => (
+                  <button
+                    key={symbol}
+                    onClick={() => toggleSymbol(symbol)}
+                    className={`px-2 py-1 text-xs rounded transition-colors ${
+                      selectedSymbols.has(symbol)
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    {symbol}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-                  return (
-                    <div className="rounded-lg border bg-background p-3 shadow-xl">
-                      <div>
-                        <ArcticonsDeepseek className="w-10 h-10 text-blue-500" />
-                        <span className="text-sm font-mono font-bold">
-                          Deepseek-R1-0528
-                        </span>
-                      </div>
-                      <div className="text-xs text-muted-foreground mb-2">
-                        {date.toLocaleString("en-US", {
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between gap-4">
-                          <span className="text-sm font-medium">Cash:</span>
-                          <span className="text-sm font-mono font-bold">
-                            ${data.totalCashValue?.toLocaleString()}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-4">
-                          <span className="text-sm font-medium">Return:</span>
-                          <span
-                            className={`text-sm font-mono font-bold ${
-                              (data.currentTotalReturn || 0) >= 0
-                                ? "text-green-500"
-                                : "text-red-500"
-                            }`}
-                          >
-                            {((data.currentTotalReturn || 0) * 100).toFixed(2)}%
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                }}
-              />
-              <Line
-                dataKey="totalCashValue"
-                type="monotone"
-                stroke={DEEPSEEK_BLUE}
-                strokeWidth={2}
-                dot={(props) => {
-                  const { key, ...restProps } = props;
-                  return (
-                    <CustomDot
-                      key={key}
-                      {...restProps}
-                      dataLength={filteredData.length}
+            {/* Profitability Filter */}
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Profitability</Label>
+              <div className="flex flex-wrap gap-2">
+                {(["all", "profitable", "losing"] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => setProfitabilityFilter(filter)}
+                    className={`px-2 py-1 text-xs rounded transition-colors capitalize ${
+                      profitabilityFilter === filter
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    {filter}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Trade Type Filter */}
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Trade Types</Label>
+              <div className="space-y-1">
+                {(["Buy", "Sell", "Hold"] as TradeOperation[]).map((type) => (
+                  <div key={type} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`trade-type-${type}`}
+                      checked={tradeTypeFilter.has(type)}
+                      onCheckedChange={() => toggleTradeType(type)}
                     />
-                  );
+                    <Label htmlFor={`trade-type-${type}`} className="text-xs cursor-pointer">
+                      {type}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Chart Controls */}
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-xs text-muted-foreground">
+            Scroll: Y-axis zoom • Shift+Scroll: X-axis zoom
+          </div>
+          <Button
+            onClick={resetZoom}
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            disabled={yZoom === 1 && xZoom === 1}
+          >
+            Reset Zoom
+          </Button>
+        </div>
+
+        {filteredData.length > 0 ? (
+          <div ref={chartRef}>
+            <ChartContainer
+              config={chartConfig}
+              className="aspect-auto h-[400px] w-full"
+            >
+              <LineChart
+                accessibilityLayer
+                data={zoomFilteredData}
+                margin={{
+                  left: 8,
+                  right: 8,
+                  top: 8,
+                  bottom: 8,
                 }}
-                activeDot={{
-                  r: 6,
-                  fill: DEEPSEEK_BLUE,
-                  stroke: "#fff",
-                  strokeWidth: 2,
-                }}
-              />
-            </LineChart>
-          </ChartContainer>
+              >
+                <CartesianGrid vertical={false} />
+                <XAxis
+                  dataKey="createdAt"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={6}
+                  minTickGap={50}
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(value) => {
+                    const date = new Date(value);
+                    return date.toLocaleTimeString("en-US", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    });
+                  }}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={6}
+                  width={70}
+                  tick={{ fontSize: 11 }}
+                  domain={yDomain}
+                  tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
+                />
+                <ChartTooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload || !payload.length) {
+                      return null;
+                    }
+
+                    const data = payload[0].payload as MetricData;
+                    const date = new Date(data.createdAt);
+
+                    return (
+                      <div className="rounded-lg border bg-background p-3 shadow-xl">
+                        <div>
+                          <ArcticonsDeepseek className="w-10 h-10 text-blue-500" />
+                          <span className="text-sm font-mono font-bold">
+                            Deepseek-R1-0528
+                          </span>
+                        </div>
+                        <div className="text-xs text-muted-foreground mb-2">
+                          {date.toLocaleString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-4">
+                            <span className="text-sm font-medium">Cash:</span>
+                            <span className="text-sm font-mono font-bold">
+                              ${data.totalCashValue?.toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-4">
+                            <span className="text-sm font-medium">Return:</span>
+                            <span
+                              className={`text-sm font-mono font-bold ${
+                                (data.currentTotalReturn || 0) >= 0
+                                  ? "text-green-500"
+                                  : "text-red-500"
+                              }`}
+                            >
+                              {((data.currentTotalReturn || 0) * 100).toFixed(2)}%
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }}
+                />
+
+                {/* Position Lines */}
+                {positionLines.map(({ positionId, entry, exit }) => (
+                  <g key={positionId}>
+                    {/* Entry line (green) */}
+                    <ReferenceLine
+                      x={entry.createdAt}
+                      stroke="#22c55e"
+                      strokeDasharray="5 5"
+                      strokeWidth={2}
+                      label={{
+                        value: `${entry.symbol} ${entry.leverage}x ENTRY`,
+                        position: "top",
+                        fill: "#22c55e",
+                        fontSize: 10,
+                      }}
+                    />
+                    {/* Exit line (red) */}
+                    {exit && (
+                      <ReferenceLine
+                        x={exit.createdAt}
+                        stroke="#ef4444"
+                        strokeDasharray="5 5"
+                        strokeWidth={2}
+                        label={{
+                          value: `${exit.symbol} ${exit.leverage}x EXIT`,
+                          position: "top",
+                          fill: "#ef4444",
+                          fontSize: 10,
+                        }}
+                      />
+                    )}
+                  </g>
+                ))}
+
+                {/* Main Line */}
+                <Line
+                  dataKey="totalCashValue"
+                  type="monotone"
+                  stroke={DEEPSEEK_BLUE}
+                  strokeWidth={2}
+                  dot={(props) => {
+                    const { key, ...restProps } = props;
+                    return (
+                      <CustomDot
+                        key={key}
+                        {...restProps}
+                        dataLength={zoomFilteredData.length}
+                      />
+                    );
+                  }}
+                  activeDot={{
+                    r: 6,
+                    fill: DEEPSEEK_BLUE,
+                    stroke: "#fff",
+                    strokeWidth: 2,
+                  }}
+                />
+
+                {/* Trade Dots as ReferenceDots */}
+                {tradeDots.map((trade, idx) => (
+                  <ReferenceDot
+                    key={`trade-dot-${trade.trade.id}-${idx}`}
+                    x={trade.createdAt}
+                    y={trade.totalCashValue}
+                    r={5}
+                    fill={
+                      trade.operation === "Buy" ? "#22c55e" :
+                      trade.operation === "Sell" ? "#ef4444" :
+                      "#eab308"
+                    }
+                    stroke="#fff"
+                    strokeWidth={2}
+                  />
+                ))}
+              </LineChart>
+            </ChartContainer>
+          </div>
         ) : (
           <div className="h-[400px] flex items-center justify-center text-muted-foreground">
             No metrics data available for this time range

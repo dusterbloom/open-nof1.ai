@@ -56,11 +56,19 @@ async function getDryRunAccountInformation(
   // Convert simulated positions to CCXT Position format
   const positions: Position[] = simulatedPositions.map((pos) => {
     const currentPrice = currentPrices[pos.symbol] || 0;
+
+    // CRITICAL: Calculate unrealized PnL here since it's not stored in positions
+    const unrealizedPnl = dryRunWallet.calculateUnrealizedPnL(pos, currentPrice);
+
+    // Calculate percentage based on margin (not notional size) to get true leveraged %
+    const margin = pos.size / pos.leverage;
+    const pnlPercentage = margin > 0 ? (unrealizedPnl / margin) * 100 : 0;
+
     return {
       symbol: pos.symbol,
       contracts: pos.size / (pos.entryPrice || 1),
       contractSize: 1,
-      unrealizedPnl: pos.unrealizedPnl || 0,
+      unrealizedPnl: unrealizedPnl, // Use calculated value, not stored 0
       leverage: pos.leverage,
       liquidationPrice: 0, // Not calculated in simulation
       collateral: pos.size / pos.leverage,
@@ -70,7 +78,7 @@ async function getDryRunAccountInformation(
       timestamp: pos.timestamp,
       isolated: false,
       side: pos.side === "long" ? "long" : "short",
-      percentage: pos.unrealizedPnl ? (pos.unrealizedPnl / pos.size) * 100 : 0,
+      percentage: pnlPercentage, // Correct percentage based on margin
       info: {},
       initialMargin: pos.size / pos.leverage,
       initialMarginPercentage: 1 / pos.leverage,
@@ -195,10 +203,12 @@ Positions: ${positions
         entry_price: position.entryPrice,
         current_price: position.markPrice,
         liquidation_price: position.liquidationPrice,
-        unrealized_pnl: position.unrealizedPnl,
+        unrealized_pnl_usd: position.unrealizedPnl,
+        unrealized_pnl_percentage: position.percentage, // CRITICAL: Include percentage for AI
         leverage: position.leverage,
         notional_usd: position.notional,
         side: position.side,
+        margin: position.initialMargin,
         stopLoss: position.stopLossPrice,
         takeProfit: position.takeProfitPrice,
       })

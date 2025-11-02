@@ -21,6 +21,9 @@ interface Trading {
   pricing?: number | null;
   stopLoss?: number | null;
   takeProfit?: number | null;
+  success: boolean;
+  errorMessage?: string | null;
+  positionId?: string | null;
   createdAt: string;
 }
 
@@ -52,8 +55,10 @@ interface Position {
 export function ModelsView() {
   const [activeTab, setActiveTab] = useState<TabType>("model-chat");
   const [chats, setChats] = useState<Chat[]>([]);
+  const [trades, setTrades] = useState<any[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tradesLoading, setTradesLoading] = useState(true);
   const [positionsLoading, setPositionsLoading] = useState(true);
   const [expandedChatId, setExpandedChatId] = useState<string | null>(null);
 
@@ -63,11 +68,25 @@ export function ModelsView() {
       if (!response.ok) return;
 
       const data = await response.json();
-      setChats(data.data || []);
+      setChats(data.data.chat || data.data || []);
       setLoading(false);
     } catch (err) {
       console.error("Error fetching chats:", err);
       setLoading(false);
+    }
+  }, []);
+
+  const fetchTrades = useCallback(async () => {
+    try {
+      const response = await fetch("/api/model/chat?view=trades");
+      if (!response.ok) return;
+
+      const data = await response.json();
+      setTrades(data.data.trades || []);
+      setTradesLoading(false);
+    } catch (err) {
+      console.error("Error fetching trades:", err);
+      setTradesLoading(false);
     }
   }, []);
 
@@ -87,21 +106,17 @@ export function ModelsView() {
 
   useEffect(() => {
     fetchChats();
+    fetchTrades();
     fetchPositions();
     const chatsInterval = setInterval(fetchChats, 30000);
+    const tradesInterval = setInterval(fetchTrades, 30000);
     const positionsInterval = setInterval(fetchPositions, 10000);
     return () => {
       clearInterval(chatsInterval);
+      clearInterval(tradesInterval);
       clearInterval(positionsInterval);
     };
-  }, [fetchChats, fetchPositions]);
-
-  // 只获取 Buy 和 Sell 操作的交易
-  const completedTrades = chats.flatMap((chat) =>
-    chat.tradings
-      .filter((t) => t.operation === "Buy" || t.operation === "Sell")
-      .map((t) => ({ ...t, chatId: chat.id, model: chat.model }))
-  );
+  }, [fetchChats, fetchTrades, fetchPositions]);
 
   const renderOperationIcon = (operation: string) => {
     switch (operation) {
@@ -117,14 +132,14 @@ export function ModelsView() {
   };
 
   const renderCompletedTrades = () => {
-    if (loading) {
+    if (tradesLoading) {
       return <div className="text-center py-8 text-sm">Loading trades...</div>;
     }
 
-    if (completedTrades.length === 0) {
+    if (trades.length === 0) {
       return (
         <div className="text-center py-8 text-muted-foreground text-sm">
-          No completed trades yet
+          No trades yet
         </div>
       );
     }
@@ -132,132 +147,158 @@ export function ModelsView() {
     return (
       <div className="space-y-3">
         <div className="text-xs text-muted-foreground mb-2">
-          {completedTrades.length} completed trade
-          {completedTrades.length > 1 ? "s" : ""}
+          {trades.length} trade{trades.length > 1 ? "s" : ""} ({trades.filter((t: any) => t.status === "closed").length} closed, {trades.filter((t: any) => t.status === "open").length} open)
         </div>
-        {completedTrades.map((trade, idx) => (
-          <Card key={`${trade.id}-${idx}`} className="overflow-hidden">
-            <CardContent className="p-4">
-              {/* Header with operation */}
-              <div className="flex items-center justify-between mb-3 pb-3 border-b">
-                <div className="flex items-center gap-2">
-                  {renderOperationIcon(trade.operation)}
-                  <span className="font-bold text-base">
-                    {trade.operation.toUpperCase()}
-                  </span>
-                  <span className="font-mono font-bold text-base">
-                    {trade.symbol}
-                  </span>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {new Date(trade.createdAt).toLocaleString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </div>
-              </div>
+        {trades.map((tradeData: any, idx: number) => {
+          const { buy, sell, pnl, pnlPercentage, status } = tradeData;
 
-              {/* Trade details grid */}
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                {/* Price */}
-                {trade.pricing && (
+          if (!buy) {
+            console.error("Invalid trade data:", tradeData);
+            return null;
+          }
+
+          return (
+            <Card key={`${buy.id}-${idx}`} className="overflow-hidden">
+              <CardContent className="p-4">
+                {/* Header with status and PnL */}
+                <div className="flex items-center justify-between mb-3 pb-3 border-b">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4 text-blue-500" />
+                    <span className="font-mono font-bold text-base">
+                      {buy?.symbol || "Unknown"}
+                    </span>
+                    <span className={`text-xs px-2 py-1 rounded-full font-semibold ${
+                      status === "closed"
+                        ? "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300"
+                        : "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300"
+                    }`}>
+                      {status === "closed" ? "CLOSED" : "OPEN"}
+                    </span>
+                  </div>
+                  {status === "closed" && pnl !== null && (
+                    <div className={`text-sm font-bold ${pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                      {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} ({pnlPercentage >= 0 ? "+" : ""}{pnlPercentage?.toFixed(2)}%)
+                    </div>
+                  )}
+                </div>
+
+                {/* Trade details grid */}
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  {/* Entry Price */}
+                  {buy.pricing && (
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground font-medium">
+                        Entry Price
+                      </div>
+                      <div className="font-mono font-bold text-base">
+                        ${buy.pricing.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Exit Price */}
+                  {status === "closed" && sell?.pricing ? (
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground font-medium">
+                        Exit Price
+                      </div>
+                      <div className="font-mono font-bold text-base">
+                        ${sell.pricing.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground font-medium">
+                        Exit Price
+                      </div>
+                      <div className="text-xs text-muted-foreground italic">
+                        Position still open
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Leverage */}
+                  {buy.leverage && (
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground font-medium">
+                        Leverage
+                      </div>
+                      <div className="font-mono font-semibold text-purple-600">
+                        {buy.leverage}x
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Position Size */}
+                  {buy.amount && (
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground font-medium">
+                        Position Size
+                      </div>
+                      <div className="font-mono font-semibold">
+                        ${buy.amount.toLocaleString()} USDT
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Entry Time */}
                   <div className="space-y-1">
                     <div className="text-xs text-muted-foreground font-medium">
-                      {trade.operation === "Buy" ? "Entry Price" : "Exit Price"}
+                      Entry Time
                     </div>
-                    <div className="font-mono font-bold text-base">
-                      $
-                      {trade.pricing.toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
+                    <div className="text-xs">
+                      {new Date(buy.createdAt).toLocaleString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
                       })}
                     </div>
                   </div>
-                )}
 
-                {/* Amount */}
-                {trade.amount && trade.pricing && (
-                  <div className="space-y-1">
-                    <div className="text-xs text-muted-foreground font-medium">
-                      Amount
+                  {/* Exit Time */}
+                  {status === "closed" && sell ? (
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground font-medium">
+                        Exit Time
+                      </div>
+                      <div className="text-xs">
+                        {new Date(sell.createdAt).toLocaleString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </div>
                     </div>
-                    <div className="font-mono font-semibold">
-                      {(trade.amount / trade.pricing).toFixed(8)}{" "}
-                      {trade.symbol.split("/")[0]}
+                  ) : (
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground font-medium">
+                        Exit Time
+                      </div>
+                      <div className="text-xs text-muted-foreground italic">
+                        -
+                      </div>
                     </div>
-                  </div>
-                )}
-
-                {/* Leverage */}
-                {trade.leverage && (
-                  <div className="space-y-1">
-                    <div className="text-xs text-muted-foreground font-medium">
-                      Leverage
-                    </div>
-                    <div className="font-mono font-semibold text-purple-600">
-                      {trade.leverage}x
-                    </div>
-                  </div>
-                )}
-
-                {/* Total Value */}
-                {trade.pricing && trade.amount && (
-                  <div className="space-y-1">
-                    <div className="text-xs text-muted-foreground font-medium">
-                      Total Value
-                    </div>
-                    <div className="font-mono font-bold text-base">
-                      $
-                      {(trade.pricing * trade.amount).toLocaleString(
-                        undefined,
-                        {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        }
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Stop Loss */}
-                {trade.stopLoss && (
-                  <div className="space-y-1">
-                    <div className="text-xs text-muted-foreground font-medium">
-                      Stop Loss
-                    </div>
-                    <div className="font-mono font-semibold text-red-500">
-                      ${trade.stopLoss.toLocaleString()}
-                    </div>
-                  </div>
-                )}
-
-                {/* Take Profit */}
-                {trade.takeProfit && (
-                  <div className="space-y-1">
-                    <div className="text-xs text-muted-foreground font-medium">
-                      Take Profit
-                    </div>
-                    <div className="font-mono font-semibold text-green-500">
-                      ${trade.takeProfit.toLocaleString()}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Model info at bottom */}
-              <div className="mt-3 pt-3 border-t">
-                <div className="text-xs text-muted-foreground">
-                  Model:{" "}
-                  <span className="font-medium text-foreground">
-                    {trade.model}
-                  </span>
+                  )}
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+
+                {/* Model info at bottom */}
+                <div className="mt-3 pt-3 border-t">
+                  <div className="text-xs text-muted-foreground">
+                    Model: <span className="font-medium text-foreground">{buy.Chat?.model || "Unknown"}</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
     );
   };
