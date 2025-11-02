@@ -33,7 +33,9 @@ async function main() {
   console.log(`Total Chat entries: ${chats}`);
 
   // Check metrics
-  const metrics = await prisma.metrics.findFirst();
+  const metrics = await prisma.metrics.findFirst({
+    orderBy: { createdAt: 'asc' }
+  });
   if (metrics) {
     console.log(`Metrics count: ${metrics.metrics.length}`);
   }

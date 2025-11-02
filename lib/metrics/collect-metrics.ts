@@ -83,6 +83,7 @@ export async function collectMetrics(options: CollectMetricsOptions): Promise<{
 
   let existMetrics = await prisma.metrics.findFirst({
     where: { model },
+    orderBy: { createdAt: "asc" }, // Always use the oldest (primary) record
   });
 
   if (!existMetrics) {

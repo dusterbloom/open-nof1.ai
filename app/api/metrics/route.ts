@@ -64,6 +64,7 @@ export const GET = async (request: NextRequest) => {
       where: {
         model: ModelType.Deepseek,
       },
+      orderBy: { createdAt: "asc" }, // Always use the oldest (primary) record
     });
 
     if (!metrics) {
