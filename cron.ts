@@ -34,12 +34,18 @@ const runChatInterval = async () => {
     process.env.CRON_SECRET_KEY || "1234"
   );
 
-  await fetch(
-    `${process.env.NEXT_PUBLIC_URL}/api/cron/3-minutes-run-interval?token=${token}`,
-    {
-      method: "GET",
-    }
-  );
+  try {
+    const response = await fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/cron/3-minutes-run-interval?token=${token}`,
+      {
+        method: "GET",
+      }
+    );
+    const result = await response.text();
+    console.log("3 minutes interval executed:", result);
+  } catch (error) {
+    console.error("Error in 3-minute interval:", error);
+  }
 };
 
 // every 3 minutes
