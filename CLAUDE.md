@@ -103,6 +103,47 @@ The trading logic follows this sequence (see `lib/ai/run.ts`):
 - `components/models-view.tsx`: Displays trade history and AI chat reasoning
 - `components/crypto-card.tsx`: Real-time price display cards for supported coins
 
+### Chart Interactions
+
+The Metrics Chart (`components/metrics-chart.tsx`) provides an interactive interface for analyzing trading performance:
+
+**Interactive Zoom**:
+- **Y-Axis Zoom**: Mouse scroll wheel (0.1x - 10x)
+- **X-Axis Zoom**: Shift + scroll wheel (0.1x - 10x)
+- **Reset**: Button to restore default zoom (1.0x/1.0x)
+- X-axis zoom is implemented via data filtering (slicing the data array) because Recharts doesn't support domain manipulation on categorical time-based axes
+
+**Advanced Filtering**:
+- **Symbol Filter**: Toggle visibility by cryptocurrency (BTC, ETH, SOL, BNB, DOGE)
+- **Profitability Filter**: View All/Profitable/Losing trades based on entry vs exit price comparison
+- **Trade Type Filter**: Show/hide Buy, Sell, and Hold operations
+- **Display Toggles**: Control position lines and trade dots independently
+
+**Visual Overlays**:
+- **Trade Dots**: Color-coded operation markers (Green=Buy, Red=Sell, Yellow=Hold)
+  - Uses ReferenceDot components with coordinates mapped to closest metric timestamps
+  - Trade execution times are matched to 20-second metric collection intervals for accurate chart positioning
+- **Position Lines**: Dashed vertical lines connecting entry/exit pairs (Green=Entry, Red=Exit with leverage labels)
+
+**API Endpoints**:
+- `/api/metrics`: Provides time-series account value data
+- `/api/trades`: Returns all historical trading operations with position linking (Buy/Sell pairs via `positionId`)
+- `/api/model/chat`: AI reasoning and decision history
+
+**Technical Details**:
+- Trade dots use closest timestamp matching: trades execute at arbitrary times but are mapped to the nearest metric timestamp (collected every 20 seconds) to ensure accurate coordinate placement on the categorical X-axis
+- Position profitability is calculated by comparing `pricing` field on Buy vs Sell operations with matching `positionId`
+- All filter operations are memoized for performance with large datasets (tested up to 5000 metrics, 500 trades)
+
+## Documentation
+
+Comprehensive documentation is available in the `/docs` directory:
+
+- **Components**: `/docs/components/METRICS_CHART.md` - Detailed metrics chart documentation with usage examples
+- **API**: `/docs/api/TRADES_ENDPOINT.md` - Complete trades API endpoint reference
+- **UI Components**: `/docs/ui-components/SHADCN_COMPONENTS.md` - Guide to shadcn/ui components used in filters
+- **Technical**: `/docs/technical/CHART_IMPLEMENTATION.md` - Deep dive into chart architecture and data transformation
+
 ## Development Notes
 
 - Always use `bun` instead of npm/yarn
