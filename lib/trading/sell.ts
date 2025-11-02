@@ -1,4 +1,4 @@
-import { binance } from "./binance";
+import { getSpotExchange, getSwapExchange } from "./exchange-factory";
 import { isDryRunMode, dryRunWallet } from "./dry-run-wallet";
 
 export interface SellParams {
@@ -7,17 +7,7 @@ export interface SellParams {
   price?: number; // Optional: if not provided, will use market price
 }
 
-/**
- * Create a Binance Spot exchange instance for public data (no auth required)
- */
-function createSpotExchange() {
-  const ccxt = require("ccxt");
-  return new ccxt.binance({
-    options: {
-      defaultType: "spot",
-    },
-  });
-}
+// REMOVED: createSpotExchange() - now using singleton from exchange-factory
 
 /**
  * Execute a sell order (close long position)
@@ -37,7 +27,7 @@ export async function sell(params: SellParams): Promise<{
   if (!executionPrice) {
     try {
       // Use Spot API for price in dry-run mode (no auth required)
-      const exchange = isDryRunMode() ? createSpotExchange() : binance;
+      const exchange = isDryRunMode() ? getSpotExchange() : getSwapExchange();
       const ticker = await exchange.fetchTicker(symbol);
       executionPrice = ticker.last || 0;
     } catch (error) {
@@ -77,6 +67,8 @@ export async function sell(params: SellParams): Promise<{
   } else {
     // Live mode: execute on exchange
     try {
+      const binance = getSwapExchange();
+
       // Fetch current position
       const positions = await binance.fetchPositions([symbol]);
       const position = positions.find((p) => p.symbol === symbol);

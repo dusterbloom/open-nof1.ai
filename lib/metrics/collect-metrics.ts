@@ -7,6 +7,7 @@ import { getAccountInformationAndPerformance } from "@/lib/trading/account-infor
 import { prisma } from "@/lib/prisma";
 import { ModelType } from "@prisma/client";
 import { InputJsonValue, JsonValue } from "@prisma/client/runtime/library";
+import { isDryRunMode, dryRunWallet } from "@/lib/trading/dry-run-wallet";
 
 // Maximum number of metrics to keep
 const MAX_METRICS_COUNT = 100;
@@ -54,6 +55,28 @@ export async function collectMetrics(options: CollectMetricsOptions): Promise<{
     reason = "manual",
     tradeId,
   } = options;
+
+  // CRITICAL FIX: Ensure wallet is restored before collecting metrics
+  // This prevents the $10,000 balance spike on server restart
+  if (isDryRunMode()) {
+    const startMoney = Number(process.env.START_MONEY) || 10000;
+    const currentBalance = dryRunWallet.getBalance();
+    const currentPnL = dryRunWallet.getTotalPnL();
+    const positions = dryRunWallet.getPositions();
+
+    // Check if wallet appears uninitialized (same logic as /api/positions)
+    const walletAppearsUninitialized =
+      currentBalance === startMoney &&
+      currentPnL === 0 &&
+      positions.length === 0;
+
+    if (walletAppearsUninitialized) {
+      console.log("[METRICS-COLLECT] Wallet uninitialized, restoring from database...");
+      const { restoreDryRunWallet } = await import("@/lib/trading/restore-dry-run-wallet");
+      await restoreDryRunWallet();
+      console.log("[METRICS-COLLECT] Wallet restoration complete");
+    }
+  }
 
   const accountInformationAndPerformance =
     await getAccountInformationAndPerformance(initialCapital);

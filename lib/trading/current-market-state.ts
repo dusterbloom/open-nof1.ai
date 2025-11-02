@@ -1,5 +1,5 @@
 import { EMA, MACD, RSI, ATR } from "technicalindicators";
-import { binance } from "./binance";
+import { getSpotExchange, getFuturesExchange, getSwapExchange } from "./exchange-factory";
 import { isDryRunMode } from "./dry-run-wallet";
 
 export interface MarketState {
@@ -90,33 +90,27 @@ function calculateATR(
 }
 
 /**
- * Create a Binance Spot exchange instance for public data (no auth required)
- */
-function createSpotExchange() {
-  const ccxt = require("ccxt");
-  return new ccxt.binance({
-    // No API keys needed for public endpoints
-    options: {
-      defaultType: "spot", // Use spot market for public data
-    },
-  });
-}
-
-/**
  * Fetch current market state for a given coin symbol
+ *
+ * Performance optimization: Uses singleton exchange instances from factory
+ * instead of creating new instances on every call.
+ *
  * @param symbol - Trading pair symbol (e.g., 'BTC/USDT')
+ * @param forceFresh - If true, always fetch fresh data (use for trading decisions)
  * @returns Market state with all technical indicators
  */
 export async function getCurrentMarketState(
-  symbol: string
+  symbol: string,
+  forceFresh: boolean = false
 ): Promise<MarketState> {
   try {
     // Normalize symbol format for Binance
     const normalizedSymbol = symbol.includes("/") ? symbol : `${symbol}/USDT`;
 
-    // In dry-run mode, use Binance Spot API (public, no auth required)
-    // In live mode, use configured exchange (futures with auth)
-    const exchange = isDryRunMode() ? createSpotExchange() : binance;
+    // Use singleton exchange instances from factory
+    // In dry-run mode: Use spot exchange (public data, no auth)
+    // In live mode: Use swap exchange (authenticated perpetual futures)
+    const exchange = isDryRunMode() ? getSpotExchange() : getSwapExchange();
 
     // Fetch 1-minute OHLCV data (last 100 candles for intraday analysis)
     const ohlcv1m = await exchange.fetchOHLCV(
@@ -180,13 +174,9 @@ export async function getCurrentMarketState(
     let fundingRate = 0;
 
     try {
-      // Create a futures exchange instance for public data (no auth required)
-      const ccxt = require("ccxt");
-      const futuresExchange = new ccxt.binance({
-        options: {
-          defaultType: "future",
-        },
-      });
+      // Use singleton futures exchange for open interest and funding rate
+      // These are public endpoints, no authentication required
+      const futuresExchange = getFuturesExchange();
 
       // Fetch open interest (futures only)
       const perpSymbol = normalizedSymbol.replace("/", "");

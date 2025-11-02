@@ -51,10 +51,11 @@ export async function run(initialCapital: number) {
   }
 
   // Fetch market data for all supported cryptocurrencies
+  // CRITICAL: forceFresh=true ensures trading decisions use real-time prices, not cached data
   const marketStates = await Promise.all(
     SUPPORTED_SYMBOLS.map(async (symbol) => ({
       symbol,
-      data: await getCurrentMarketState(symbol),
+      data: await getCurrentMarketState(symbol, true), // forceFresh=true for trading
     }))
   );
 

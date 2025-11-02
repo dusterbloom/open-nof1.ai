@@ -1,4 +1,4 @@
-import { binance } from "./binance";
+import { getSwapExchange } from "./exchange-factory";
 import { isDryRunMode, dryRunWallet } from "./dry-run-wallet";
 
 export interface StopLossTakeProfitParams {
@@ -112,6 +112,7 @@ async function setLiveStopLossTakeProfit(
   positionSize: number,
   side: "long" | "short"
 ): Promise<StopLossTakeProfitResult> {
+  const binance = getSwapExchange();
   const result: StopLossTakeProfitResult = { success: true };
 
   try {
@@ -194,6 +195,8 @@ export async function cancelStopLossTakeProfit(
   }
 
   try {
+    const binance = getSwapExchange();
+
     // Fetch all open orders for the symbol
     const openOrders = await binance.fetchOpenOrders(symbol);
 

@@ -1,5 +1,5 @@
 import { Position } from "ccxt";
-import { binance } from "./binance";
+import { getSpotExchange, getSwapExchange } from "./exchange-factory";
 import { isDryRunMode, dryRunWallet } from "./dry-run-wallet";
 
 export interface AccountInformationAndPerformance {
@@ -12,17 +12,7 @@ export interface AccountInformationAndPerformance {
   sharpeRatio: number;
 }
 
-/**
- * Create a Binance Spot exchange instance for public data (no auth required)
- */
-function createSpotExchange() {
-  const ccxt = require("ccxt");
-  return new ccxt.binance({
-    options: {
-      defaultType: "spot",
-    },
-  });
-}
+// REMOVED: createSpotExchange() - now using singleton from exchange-factory
 
 /**
  * Get account information in dry-run mode (simulated)
@@ -35,7 +25,7 @@ async function getDryRunAccountInformation(
   const currentPrices: Record<string, number> = {};
 
   try {
-    const spotExchange = createSpotExchange();
+    const spotExchange = getSpotExchange();
     const tickers = await spotExchange.fetchTickers(supportedSymbols);
 
     for (const symbol of supportedSymbols) {
@@ -132,6 +122,7 @@ async function getDryRunAccountInformation(
 async function getLiveAccountInformation(
   initialCapital: number
 ): Promise<AccountInformationAndPerformance> {
+  const binance = getSwapExchange();
   const positions = await binance.fetchPositions([
     "BTC/USDT",
     "ETH/USDT",
