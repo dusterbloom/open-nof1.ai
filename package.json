@@ -6,7 +6,10 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "cron": "node scripts/cron-daemon.js",
+    "cron:metrics": "node scripts/trigger-metrics-cron.js",
+    "cron:trading": "node scripts/trigger-trading-cron.js"
   },
   "dependencies": {
     "@ai-sdk/deepseek": "^1.0.23",
