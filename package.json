@@ -9,7 +9,10 @@
     "lint": "eslint",
     "cron": "node scripts/cron-daemon.js",
     "cron:metrics": "node scripts/trigger-metrics-cron.js",
-    "cron:trading": "node scripts/trigger-trading-cron.js"
+    "cron:trading": "node scripts/trigger-trading-cron.js",
+    "db:reset": "bun run scripts/reset-database.ts",
+    "db:restore": "bun run scripts/restore-database.ts",
+    "test:liquidation": "bun run scripts/test-liquidation-protection.ts"
   },
   "dependencies": {
     "@ai-sdk/deepseek": "^1.0.23",

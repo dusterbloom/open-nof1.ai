@@ -61,6 +61,72 @@ export async function run(initialCapital: number) {
 
   const accountInformationAndPerformance =
     await getAccountInformationAndPerformance(initialCapital);
+
+  // ========================================
+  // CRITICAL: LIQUIDATION PROTECTION
+  // ========================================
+  // Check all positions for liquidation risk BEFORE AI decision
+  // If any position is within 10% of liquidation, force-close it immediately
+  const LIQUIDATION_SAFETY_THRESHOLD = 10; // Close if within 10% of liquidation
+
+  for (const position of accountInformationAndPerformance.positions) {
+    const liquidationDistance = position.info?.liquidationDistance as number || 100;
+
+    if (liquidationDistance <= LIQUIDATION_SAFETY_THRESHOLD && liquidationDistance > 0) {
+      console.warn(`
+⚠️  LIQUIDATION PROTECTION TRIGGERED ⚠️
+Symbol: ${position.symbol}
+Current Price: ${position.markPrice} USDT
+Liquidation Price: ${position.liquidationPrice} USDT
+Distance to Liquidation: ${liquidationDistance.toFixed(2)}%
+Action: EMERGENCY FORCE-CLOSE
+      `);
+
+      // Force-close the position immediately (100% sell)
+      try {
+        const sellResult = await sell({
+          symbol: position.symbol as string,
+          percentage: 100, // Close entire position
+        });
+
+        if (sellResult.success) {
+          // Record the emergency liquidation protection action
+          await prisma.chat.create({
+            data: {
+              reasoning: `EMERGENCY LIQUIDATION PROTECTION: Position ${position.symbol} was ${liquidationDistance.toFixed(2)}% from liquidation. Auto-closed to prevent total loss.`,
+              chat: `🚨 LIQUIDATION PROTECTION: Force-closed ${position.symbol} position at ${sellResult.price} USDT (was ${liquidationDistance.toFixed(2)}% from liquidation at ${position.liquidationPrice} USDT). PnL: ${sellResult.pnl?.toFixed(2)} USDT`,
+              userPrompt: "EMERGENCY_LIQUIDATION_PROTECTION",
+              tradings: {
+                create: {
+                  symbol: SYMBOL_TO_ENUM[position.symbol as string],
+                  operation: operation.Sell,
+                  pricing: sellResult.price,
+                  amount: position.contracts,
+                  leverage: position.leverage,
+                  positionId: null,
+                  success: true,
+                  errorMessage: null,
+                },
+              },
+            },
+          });
+
+          console.log(`✅ Position closed successfully. PnL: ${sellResult.pnl?.toFixed(2)} USDT`);
+
+          // Collect metrics after emergency close
+          await collectMetrics({
+            initialCapital,
+            reason: "LIQUIDATION_PROTECTION",
+          });
+        } else {
+          console.error(`❌ Failed to close position: ${sellResult.error}`);
+        }
+      } catch (error) {
+        console.error(`❌ Emergency close failed for ${position.symbol}:`, error);
+      }
+    }
+  }
+
   // Count previous Chat entries to provide an invocation counter in the prompt
   const invocationCount = await prisma.chat.count();
 

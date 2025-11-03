@@ -99,6 +99,54 @@ class DryRunWallet {
   }
 
   /**
+   * Calculate liquidation price for a position
+   *
+   * For perpetual futures with cross margin:
+   * - Long: liquidationPrice = entryPrice * (1 - (1 / leverage) + maintenanceMarginRate)
+   * - Short: liquidationPrice = entryPrice * (1 + (1 / leverage) - maintenanceMarginRate)
+   *
+   * Binance maintenance margin rate varies by position size, but we use 0.5% as a safe default
+   * for most position sizes on major cryptocurrencies.
+   *
+   * @param position The position to calculate liquidation price for
+   * @returns Liquidation price in USDT
+   */
+  calculateLiquidationPrice(position: SimulatedPosition): number {
+    // Binance maintenance margin rate (0.5% for most positions)
+    // This is a conservative estimate - actual rate depends on position tier
+    const maintenanceMarginRate = 0.005;
+
+    if (position.side === "long") {
+      // Long liquidation: price drops to the point where losses = initial margin
+      return position.entryPrice * (1 - (1 / position.leverage) + maintenanceMarginRate);
+    } else {
+      // Short liquidation: price rises to the point where losses = initial margin
+      return position.entryPrice * (1 + (1 / position.leverage) - maintenanceMarginRate);
+    }
+  }
+
+  /**
+   * Calculate distance to liquidation as a percentage
+   *
+   * @param position The position to check
+   * @param currentPrice Current market price
+   * @returns Percentage distance to liquidation (positive = safe, negative = past liquidation)
+   */
+  calculateLiquidationDistance(position: SimulatedPosition, currentPrice: number): number {
+    const liquidationPrice = this.calculateLiquidationPrice(position);
+
+    if (position.side === "long") {
+      // For longs, liquidation occurs when price drops below liquidation price
+      // Distance = (currentPrice - liquidationPrice) / currentPrice
+      return ((currentPrice - liquidationPrice) / currentPrice) * 100;
+    } else {
+      // For shorts, liquidation occurs when price rises above liquidation price
+      // Distance = (liquidationPrice - currentPrice) / currentPrice
+      return ((liquidationPrice - currentPrice) / currentPrice) * 100;
+    }
+  }
+
+  /**
    * Update position's unrealized PnL
    */
   updatePositionPnL(symbol: string, currentPrice: number): void {

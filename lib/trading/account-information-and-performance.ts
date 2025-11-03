@@ -54,13 +54,17 @@ async function getDryRunAccountInformation(
     const margin = pos.size / pos.leverage;
     const pnlPercentage = margin > 0 ? (unrealizedPnl / margin) * 100 : 0;
 
+    // CRITICAL: Calculate liquidation price for risk management
+    const liquidationPrice = dryRunWallet.calculateLiquidationPrice(pos);
+    const liquidationDistance = dryRunWallet.calculateLiquidationDistance(pos, currentPrice);
+
     return {
       symbol: pos.symbol,
       contracts: pos.size / (pos.entryPrice || 1),
       contractSize: 1,
       unrealizedPnl: unrealizedPnl, // Use calculated value, not stored 0
       leverage: pos.leverage,
-      liquidationPrice: 0, // Not calculated in simulation
+      liquidationPrice: liquidationPrice, // CRITICAL: Now calculated for safety
       collateral: pos.size / pos.leverage,
       notional: pos.size,
       markPrice: currentPrice,
@@ -69,7 +73,7 @@ async function getDryRunAccountInformation(
       isolated: false,
       side: pos.side === "long" ? "long" : "short",
       percentage: pnlPercentage, // Correct percentage based on margin
-      info: {},
+      info: { liquidationDistance }, // Include distance for monitoring
       initialMargin: pos.size / pos.leverage,
       initialMarginPercentage: 1 / pos.leverage,
       maintenanceMargin: 0,
@@ -187,13 +191,15 @@ Current Total Return (percent): ${currentTotalReturn * 100}%
 Available Cash: ${availableCash}
 Current Account Value: ${totalCashValue}
 Positions: ${positions
-    .map((position) =>
-      JSON.stringify({
+    .map((position) => {
+      const liquidationDistance = position.info?.liquidationDistance || 0;
+      return JSON.stringify({
         symbol: position.symbol,
         quantity: position.contracts,
         entry_price: position.entryPrice,
         current_price: position.markPrice,
         liquidation_price: position.liquidationPrice,
+        liquidation_distance_percent: liquidationDistance, // CRITICAL: Distance to liquidation
         unrealized_pnl_usd: position.unrealizedPnl,
         unrealized_pnl_percentage: position.percentage, // CRITICAL: Include percentage for AI
         leverage: position.leverage,
@@ -202,8 +208,8 @@ Positions: ${positions
         margin: position.initialMargin,
         stopLoss: position.stopLossPrice,
         takeProfit: position.takeProfitPrice,
-      })
-    )
+      });
+    })
     .join("\n")}`;
   return output;
 }
