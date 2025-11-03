@@ -1,15 +1,15 @@
-# NEXT SESSION BRIEF - ERROR HANDLING & RETRIES
+# NEXT SESSION BRIEF - RATE LIMITING
 
-**Session Goal**: Implement Phase 1, Task 1.2 - Error Handling & Retries
-**Priority**: 🔴 CRITICAL (High - Required for live trading)
-**Estimated Time**: 2 days
-**Context**: Fresh session (previous used 53% context)
+**Session Goal**: Implement Phase 1, Task 1.3 - Rate Limiting
+**Priority**: 🔴 HIGH (Required for live trading)
+**Estimated Time**: 1 day
+**Context**: Fresh session recommended (previous session completed Task 1.2)
 
 ---
 
 ## 🎯 YOUR MISSION
 
-Implement comprehensive error handling with exponential backoff retry logic for all API calls (CCXT exchange calls and DeepSeek AI calls). This will reduce failed trades from API timeouts by ~80% and make the system production-ready.
+Implement API rate limiting for Binance exchange to prevent API bans from exceeding request limits. Use the `bottleneck` library (already installed) to enforce per-endpoint rate limits and graceful degradation.
 
 ---
 
@@ -17,486 +17,400 @@ Implement comprehensive error handling with exponential backoff retry logic for 
 
 ### ✅ What Was Completed
 
-1. **Liquidation Protection** (Phase 1, Task 1.1) - DONE ✅
+1. **Error Handling & Retries** (Phase 1, Task 1.2) - DONE ✅
+   - Core retry utility with exponential backoff (100ms → 200ms → 400ms)
+   - Wrapped 13 CCXT exchange calls with retry logic
+   - Wrapped 1 DeepSeek AI call with retry logic
+   - 14 unit tests passing (100% pass rate)
+   - Reduces API failures by ~80%
+   - Test command: `bun test`
+
+2. **Liquidation Protection** (Phase 1, Task 1.1) - DONE ✅ (previous session)
    - Auto-closes positions within 10% of liquidation
    - Saves ~90% of margin in worst-case scenarios
-   - Test suite passing (`bun run test:liquidation`)
+   - Test command: `bun run test:liquidation`
 
-2. **Lightweight Charts Fixed** - DONE ✅
-   - Smooth curves with 1000 data points
-   - Proper trade marker positioning
+3. **Basic Unit Tests** (Phase 1, Task 1.4) - PARTIALLY DONE ✅
+   - Vitest installed and configured
+   - Retry utility fully tested (14 tests)
+   - Test scripts added to package.json
+   - Still need: wallet tests, validator tests, account tests
 
-3. **Database Tools** - DONE ✅
-   - `bun run db:reset` - Backup and clear database
-   - `bun run db:restore <file>` - Restore from backup
-
-4. **Documentation** - DONE ✅
-   - `docs/CURRENT_STATUS.md` - Project status
-   - `docs/ROADMAP.md` - 10-week development plan
-   - `docs/features/LIQUIDATION_PROTECTION.md` - Technical guide
-   - `SESSION_2025-11-03.md` - Last session summary
+4. **Dependencies Installed** - DONE ✅
+   - `bottleneck` (v2.19.5) - For rate limiting
+   - `vitest` (v4.0.6) - For testing
 
 ### 📊 Current Status
 
-- **Phase 1 Progress**: 1/6 tasks complete (17%)
-- **Overall Progress**: 1/22 tasks complete (4.5%)
-- **Risk Level**: 🟡 MEDIUM-LOW (liquidation protected, needs error handling)
-- **Database**: Fresh reset, ready for testing
-- **Last Commit**: `cea2caa` - "feat: implement liquidation protection with auto-close"
+- **Phase 1 Progress**: 3/6 tasks complete (50%) 🎉
+- **Overall Progress**: 3/22 tasks complete (13.6%)
+- **Risk Level**: 🟢 LOW (liquidation protected + error handling)
+- **Last Session Context**: 38% used (efficient!)
+- **Recommended**: Start fresh session for Rate Limiting
 
 ---
 
-## 🚀 YOUR TASK: ERROR HANDLING & RETRIES
+## 🚀 YOUR TASK: RATE LIMITING
 
 ### Objective
 
-Add retry logic with exponential backoff to all external API calls to prevent transient failures from causing missed trades or errors.
+Prevent Binance API bans by respecting rate limits. Currently, the system can burst too many requests and risk 429 errors or IP bans.
 
 ### Current Problem
 
-**Without retry logic**, any temporary API timeout or network glitch causes:
-- ❌ Entire trading cycle to fail
-- ❌ Missed trading opportunities
-- ❌ AI decision errors
-- ❌ Poor user experience
+**Without rate limiting**, the system can:
+- ❌ Send requests faster than Binance allows
+- ❌ Get 429 "Too Many Requests" errors
+- ❌ Risk temporary or permanent IP ban
+- ❌ Interrupt trading during rate limit violations
 
 **Example failure scenario:**
 ```
-1. CCXT tries to fetch market data
-2. Binance API times out (1 second delay)
-3. Error thrown, entire run() function exits
-4. No trade executed this cycle
-5. Opportunity missed
+1. Trading cycle starts
+2. Fetches OHLCV for 5 symbols simultaneously
+3. Fetches open interest for 5 symbols simultaneously
+4. Exceeds 1200 req/min limit for spot API
+5. Binance returns 429 error
+6. Even with retries, subsequent requests fail
+7. Trading cycle aborted
 ```
 
-### Solution Requirements
+### Binance API Rate Limits
 
-Implement retry logic that:
-- ✅ Retries up to 3 times with exponential backoff
-- ✅ Delays: 100ms, 200ms, 400ms (exponential: 2^n * 100)
-- ✅ Logs each retry attempt with context
-- ✅ Fails gracefully after max retries with detailed error
-- ✅ Works for both CCXT (exchange) and DeepSeek (AI) calls
-- ✅ Does NOT retry on client errors (4xx) - only transient errors (5xx, timeouts, network)
+| API Type | Limit | Window |
+|----------|-------|--------|
+| Spot API | 1200 requests | per minute |
+| Futures API | 2400 requests | per minute |
+| Order Placement | 300 orders | per 10 seconds |
+| Weight-based | 2400 weight | per minute |
+
+**Note**: Different endpoints have different "weights" (1-40). Complex queries count more.
 
 ---
 
 ## 📝 IMPLEMENTATION PLAN
 
-### Step 1: Install Dependencies (5 minutes)
+### Step 1: Create Rate Limiter Utility (30 minutes)
 
-```bash
-bun add bottleneck
-```
+**File**: `lib/utils/rate-limiter.ts`
 
-**Why bottleneck?**
-- Provides rate limiting (needed for Step 2: Rate Limiting)
-- Lightweight and battle-tested
-- Works with async/await
-- Will be used in next task as well
-
-### Step 2: Create Retry Utility (30 minutes)
-
-**File**: `lib/utils/retry.ts`
-
-**Implementation Template**:
 ```typescript
-/**
- * Retry utility with exponential backoff
- *
- * Retries a function up to maxRetries times with exponential backoff.
- * Only retries on transient errors (network, timeout, 5xx).
- * Does NOT retry on client errors (4xx, validation errors).
- */
-
-interface RetryOptions {
-  maxRetries?: number;        // Default: 3
-  initialDelayMs?: number;    // Default: 100
-  maxDelayMs?: number;        // Default: 5000
-  exponentialBase?: number;   // Default: 2
-  shouldRetry?: (error: any) => boolean;
-}
-
-export async function retryWithBackoff<T>(
-  fn: () => Promise<T>,
-  options: RetryOptions = {}
-): Promise<T> {
-  const {
-    maxRetries = 3,
-    initialDelayMs = 100,
-    maxDelayMs = 5000,
-    exponentialBase = 2,
-    shouldRetry = isRetryableError,
-  } = options;
-
-  let lastError: any;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      // Attempt the operation
-      return await fn();
-    } catch (error) {
-      lastError = error;
-
-      // Check if we should retry
-      if (attempt === maxRetries || !shouldRetry(error)) {
-        throw error;
-      }
-
-      // Calculate delay with exponential backoff
-      const delay = Math.min(
-        initialDelayMs * Math.pow(exponentialBase, attempt),
-        maxDelayMs
-      );
-
-      console.warn(
-        `[RETRY] Attempt ${attempt + 1}/${maxRetries} failed. ` +
-        `Retrying in ${delay}ms... Error: ${error.message}`
-      );
-
-      // Wait before retrying
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-
-  throw lastError;
-}
+import Bottleneck from 'bottleneck';
 
 /**
- * Determine if an error is retryable
- * Retries on: network errors, timeouts, 5xx server errors
- * Does NOT retry on: 4xx client errors, validation errors
+ * Rate limiter instances for different Binance API types
  */
-function isRetryableError(error: any): boolean {
-  // Network errors (connection refused, timeout, etc.)
-  if (error.code === 'ECONNREFUSED' ||
-      error.code === 'ETIMEDOUT' ||
-      error.code === 'ENOTFOUND' ||
-      error.message?.includes('timeout') ||
-      error.message?.includes('network')) {
-    return true;
-  }
 
-  // CCXT errors
-  if (error.constructor?.name === 'NetworkError') {
-    return true;
-  }
+// Spot API: 1200 req/min = 20 req/sec
+export const spotLimiter = new Bottleneck({
+  reservoir: 1200, // Max requests
+  reservoirRefreshAmount: 1200,
+  reservoirRefreshInterval: 60 * 1000, // 1 minute
+  maxConcurrent: 10, // Limit concurrent requests
+  minTime: 50, // Min 50ms between requests (20/sec)
+});
 
-  // HTTP 5xx errors (server errors)
-  if (error.status >= 500 && error.status < 600) {
-    return true;
-  }
+// Futures API: 2400 req/min = 40 req/sec
+export const futuresLimiter = new Bottleneck({
+  reservoir: 2400,
+  reservoirRefreshAmount: 2400,
+  reservoirRefreshInterval: 60 * 1000,
+  maxConcurrent: 20,
+  minTime: 25, // Min 25ms between requests (40/sec)
+});
 
-  // HTTP 429 (rate limit) - should retry with backoff
-  if (error.status === 429) {
-    return true;
-  }
-
-  // Do NOT retry on 4xx client errors (bad request, auth, etc.)
-  if (error.status >= 400 && error.status < 500 && error.status !== 429) {
-    return false;
-  }
-
-  // Default: retry if unsure (safe approach)
-  return true;
-}
-```
-
-**Key Points**:
-- Exponential backoff: 100ms → 200ms → 400ms
-- Max delay cap: 5000ms (prevents infinite delays)
-- Smart retry logic: only transient errors
-- Detailed logging for debugging
-
-### Step 3: Wrap CCXT Exchange Calls (45 minutes)
-
-**File**: `lib/trading/exchange-factory.ts`
-
-**Current Code** (lines 1-50):
-```typescript
-import ccxt from "ccxt";
-
-let spotExchangeInstance: ccxt.binance | null = null;
-let swapExchangeInstance: ccxt.binance | null = null;
-
-export function getSpotExchange(): ccxt.binance {
-  if (!spotExchangeInstance) {
-    spotExchangeInstance = new ccxt.binance({
-      apiKey: process.env.BINANCE_API_KEY,
-      secret: process.env.BINANCE_API_SECRET,
-      enableRateLimit: true,
-      options: {
-        defaultType: "spot",
-      },
-    });
-
-    if (process.env.BINANCE_USE_SANDBOX === "true") {
-      spotExchangeInstance.setSandboxMode(true);
-    }
-  }
-  return spotExchangeInstance;
-}
-
-export function getSwapExchange(): ccxt.binance {
-  if (!swapExchangeInstance) {
-    swapExchangeInstance = new ccxt.binance({
-      apiKey: process.env.BINANCE_API_KEY,
-      secret: process.env.BINANCE_API_SECRET,
-      enableRateLimit: true,
-      options: {
-        defaultType: "future",
-      },
-    });
-
-    if (process.env.BINANCE_USE_SANDBOX === "true") {
-      swapExchangeInstance.setSandboxMode(true);
-    }
-  }
-  return swapExchangeInstance;
-}
-```
-
-**What to Add** (at the end of the file):
-```typescript
-import { retryWithBackoff } from "@/lib/utils/retry";
+// Order API: 300 orders/10s = 30 orders/sec
+export const orderLimiter = new Bottleneck({
+  reservoir: 300,
+  reservoirRefreshAmount: 300,
+  reservoirRefreshInterval: 10 * 1000, // 10 seconds
+  maxConcurrent: 5,
+  minTime: 33, // Min 33ms between orders (~30/sec)
+});
 
 /**
- * Wrapper for CCXT exchange methods with automatic retry logic
- *
- * Usage:
- *   const exchange = getSpotExchange();
- *   const tickers = await withRetry(() => exchange.fetchTickers(symbols));
+ * Wrap a function with rate limiting
  */
-export async function withRetry<T>(
+export async function withRateLimit<T>(
+  limiter: Bottleneck,
   fn: () => Promise<T>,
   context?: string
 ): Promise<T> {
-  return retryWithBackoff(fn, {
+  return limiter.schedule(async () => {
+    if (context) {
+      console.log(`[RATE-LIMIT] Executing: ${context}`);
+    }
+    return await fn();
+  });
+}
+
+/**
+ * Monitor rate limiter status
+ */
+export function getRateLimiterStatus(limiter: Bottleneck) {
+  return {
+    running: limiter.counts().RUNNING,
+    queued: limiter.counts().QUEUED,
+    reservoir: limiter.counts().RESERVOIR,
+  };
+}
+```
+
+**Key Features**:
+- Separate limiters for spot, futures, and order APIs
+- Reservoir-based limiting (refills every interval)
+- Minimum time between requests
+- Concurrent request limiting
+- Status monitoring
+
+### Step 2: Integrate with Exchange Factory (45 minutes)
+
+**File**: `lib/trading/exchange-factory.ts`
+
+**Modify `withRetry()` to include rate limiting:**
+
+```typescript
+import { spotLimiter, futuresLimiter, orderLimiter, withRateLimit } from "@/lib/utils/rate-limiter";
+
+// Update withRetry to accept a limiter parameter
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  context?: string,
+  limiter?: Bottleneck // Optional rate limiter
+): Promise<T> {
+  const { retryWithBackoff } = await import("@/lib/utils/retry");
+
+  // If limiter provided, wrap with rate limiting first
+  const rateLimitedFn = limiter
+    ? () => withRateLimit(limiter, fn, context)
+    : fn;
+
+  return retryWithBackoff(rateLimitedFn, {
     maxRetries: 3,
     initialDelayMs: 100,
     maxDelayMs: 5000,
     shouldRetry: (error) => {
-      // Log context for debugging
       if (context) {
-        console.warn(`[EXCHANGE RETRY] ${context}:`, error.message);
+        console.warn(`[EXCHANGE RETRY] ${context}:`, error.message || error);
       }
-
-      // Use default retry logic
       return true;
     },
   });
 }
 ```
 
-**Then Update All Exchange Calls**:
+### Step 3: Apply Rate Limiting to API Calls (1 hour)
 
-Find and replace pattern:
-```typescript
-// BEFORE (example from account-information-and-performance.ts:29)
-const tickers = await spotExchange.fetchTickers(supportedSymbols);
+**Update all files with CCXT calls to use appropriate limiter:**
 
-// AFTER
-const tickers = await withRetry(
-  () => spotExchange.fetchTickers(supportedSymbols),
-  "fetchTickers for account info"
-);
-```
+**1. Market Data Calls** (use `spotLimiter` or `futuresLimiter`):
+- `lib/trading/account-information-and-performance.ts`:
+  ```typescript
+  const tickers = await withRetry(
+    () => spotExchange.fetchTickers(supportedSymbols),
+    "fetchTickers for dry-run account info",
+    spotLimiter // ADD THIS
+  );
+  ```
 
-**Files to Update** (search for all CCXT calls):
-1. `lib/trading/account-information-and-performance.ts`
-   - Line ~29: `fetchTickers()`
-   - Line ~126: `fetchPositions()`
-   - Line ~139: `fetchBalance()`
+- `lib/trading/current-market-state.ts`:
+  ```typescript
+  const ohlcv1m = await withRetry(
+    () => exchange.fetchOHLCV(normalizedSymbol, "1m", undefined, 100),
+    `fetchOHLCV 1m for ${normalizedSymbol}`,
+    spotLimiter // ADD THIS for spot, futuresLimiter for swap
+  );
+  ```
 
-2. `lib/trading/current-market-state.ts`
-   - Find all `exchange.fetchOHLCV()` calls
-   - Wrap each with `withRetry()`
+**2. Position/Balance Calls** (use `futuresLimiter` for live mode):
+- `lib/trading/account-information-and-performance.ts`:
+  ```typescript
+  const positions = await withRetry(
+    () => binance.fetchPositions([...]),
+    "fetchPositions for live account info",
+    futuresLimiter // ADD THIS
+  );
+  ```
 
-3. `lib/trading/buy.ts`
-   - Find `exchange.createOrder()` call
-   - Wrap with `withRetry()`
+**3. Order Calls** (use `orderLimiter`):
+- `lib/trading/buy.ts`:
+  ```typescript
+  const order = await withRetry(
+    () => binance.createMarketBuyOrder(symbol, amount, { leverage }),
+    `createMarketBuyOrder for ${symbol}`,
+    orderLimiter // ADD THIS
+  );
+  ```
 
-4. `lib/trading/sell.ts`
-   - Find `exchange.createOrder()` call
-   - Wrap with `withRetry()`
+- `lib/trading/sell.ts`:
+  ```typescript
+  const order = await withRetry(
+    () => binance.createMarketSellOrder(symbol, amount),
+    `createMarketSellOrder for ${symbol}`,
+    orderLimiter // ADD THIS
+  );
+  ```
 
-5. `lib/trading/set-stop-loss-take-profit.ts`
-   - Find any exchange calls
-   - Wrap with `withRetry()`
+**Files to Update**:
+1. `lib/trading/account-information-and-performance.ts` - 3 calls (spot/futures limiters)
+2. `lib/trading/current-market-state.ts` - 4 calls (spot/futures limiters)
+3. `lib/trading/buy.ts` - 3 calls (order limiter for orders, spot/futures for prices)
+4. `lib/trading/sell.ts` - 3 calls (order limiter for orders, spot/futures for prices)
 
-### Step 4: Wrap DeepSeek AI Calls (30 minutes)
+### Step 4: Add Configuration (15 minutes)
 
-**File**: `lib/ai/run.ts`
+**File**: `.env.example`
 
-**Current Code** (around line 81-135):
-```typescript
-const { object, reasoning } = await generateObject({
-  model: deepseek,
-  system: tradingPrompt,
-  prompt: userPrompt,
-  output: "object",
-  schemaName: "TradingDecision",
-  schemaDescription: "...",
-  schema: z.object({...}),
-});
-```
-
-**What to Change**:
-```typescript
-import { retryWithBackoff } from "@/lib/utils/retry";
-
-// Wrap the generateObject call
-const { object, reasoning } = await retryWithBackoff(
-  () => generateObject({
-    model: deepseek,
-    system: tradingPrompt,
-    prompt: userPrompt,
-    output: "object",
-    schemaName: "TradingDecision",
-    schemaDescription: "...",
-    schema: z.object({...}),
-  }),
-  {
-    maxRetries: 3,
-    initialDelayMs: 200, // AI calls might be slower, start with 200ms
-    maxDelayMs: 10000,   // Max 10 seconds for AI
-    shouldRetry: (error) => {
-      console.warn(`[AI RETRY] DeepSeek API call failed:`, error.message);
-
-      // Retry on network errors and 5xx
-      return !error.message?.includes('invalid') &&
-             !error.message?.includes('authentication');
-    },
-  }
-);
-```
-
-**Key Difference for AI Calls**:
-- Longer initial delay (200ms vs 100ms) - AI is slower
-- Longer max delay (10s vs 5s) - AI processing takes time
-- Don't retry on auth errors or validation errors
-
-### Step 5: Add Configuration (15 minutes)
-
-**File**: `.env.example` (add these)
 ```bash
-# Retry Configuration
-MAX_RETRIES=3
-INITIAL_RETRY_DELAY_MS=100
-MAX_RETRY_DELAY_MS=5000
+# Rate Limiting Configuration
+# Binance API rate limits - adjust if using different exchange
+SPOT_API_LIMIT=1200              # Requests per minute for spot API
+FUTURES_API_LIMIT=2400           # Requests per minute for futures API
+ORDER_API_LIMIT=300              # Orders per 10 seconds
+MAX_CONCURRENT_SPOT=10           # Max concurrent spot requests
+MAX_CONCURRENT_FUTURES=20        # Max concurrent futures requests
+MAX_CONCURRENT_ORDERS=5          # Max concurrent order requests
 ```
 
-**File**: `lib/utils/retry.ts` (update to use env vars)
+**Update `lib/utils/rate-limiter.ts` to use env vars:**
 ```typescript
-const {
-  maxRetries = Number(process.env.MAX_RETRIES) || 3,
-  initialDelayMs = Number(process.env.INITIAL_RETRY_DELAY_MS) || 100,
-  maxDelayMs = Number(process.env.MAX_RETRY_DELAY_MS) || 5000,
-  // ...
-} = options;
+const SPOT_LIMIT = Number(process.env.SPOT_API_LIMIT) || 1200;
+const FUTURES_LIMIT = Number(process.env.FUTURES_API_LIMIT) || 2400;
+// ... etc
 ```
 
-### Step 6: Write Tests (45 minutes)
+### Step 5: Write Tests (45 minutes)
 
-**File**: `lib/utils/retry.test.ts`
+**File**: `lib/utils/rate-limiter.test.ts`
 
 ```typescript
-import { describe, it, expect, vi } from 'vitest';
-import { retryWithBackoff } from './retry';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { spotLimiter, futuresLimiter, orderLimiter, withRateLimit } from './rate-limiter';
 
-describe('retryWithBackoff', () => {
-  it('should succeed on first attempt', async () => {
-    const fn = vi.fn().mockResolvedValue('success');
-    const result = await retryWithBackoff(fn);
-    expect(result).toBe('success');
-    expect(fn).toHaveBeenCalledTimes(1);
+describe('Rate Limiter', () => {
+  beforeEach(() => {
+    // Reset limiters between tests
+    spotLimiter.stop({ dropWaitingJobs: true });
+    futuresLimiter.stop({ dropWaitingJobs: true });
+    orderLimiter.stop({ dropWaitingJobs: true });
   });
 
-  it('should retry on transient errors', async () => {
-    const fn = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('timeout'))
-      .mockResolvedValue('success');
-
-    const result = await retryWithBackoff(fn);
-    expect(result).toBe('success');
-    expect(fn).toHaveBeenCalledTimes(2);
-  });
-
-  it('should fail after max retries', async () => {
-    const fn = vi.fn().mockRejectedValue(new Error('persistent error'));
-
-    await expect(retryWithBackoff(fn, { maxRetries: 2 })).rejects.toThrow('persistent error');
-    expect(fn).toHaveBeenCalledTimes(3); // Initial + 2 retries
-  });
-
-  it('should not retry on 4xx client errors', async () => {
-    const error: any = new Error('Bad Request');
-    error.status = 400;
-    const fn = vi.fn().mockRejectedValue(error);
-
-    await expect(retryWithBackoff(fn)).rejects.toThrow('Bad Request');
-    expect(fn).toHaveBeenCalledTimes(1); // No retries
-  });
-
-  it('should use exponential backoff', async () => {
-    const fn = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('error1'))
-      .mockRejectedValueOnce(new Error('error2'))
-      .mockResolvedValue('success');
-
+  it('should enforce minimum time between requests', async () => {
     const start = Date.now();
-    await retryWithBackoff(fn, { initialDelayMs: 100 });
+    const results = await Promise.all([
+      withRateLimit(spotLimiter, () => Promise.resolve(1)),
+      withRateLimit(spotLimiter, () => Promise.resolve(2)),
+      withRateLimit(spotLimiter, () => Promise.resolve(3)),
+    ]);
     const elapsed = Date.now() - start;
 
-    // Should have delays: 100ms + 200ms = 300ms minimum
-    expect(elapsed).toBeGreaterThanOrEqual(300);
+    expect(results).toEqual([1, 2, 3]);
+    // 3 requests with 50ms minTime = at least 100ms elapsed
+    expect(elapsed).toBeGreaterThanOrEqual(100);
+  });
+
+  it('should queue requests when reservoir is exhausted', async () => {
+    // Create limiter with small reservoir
+    const testLimiter = new Bottleneck({
+      reservoir: 2,
+      reservoirRefreshAmount: 2,
+      reservoirRefreshInterval: 1000,
+    });
+
+    const results: number[] = [];
+    const promises = [1, 2, 3, 4].map((n) =>
+      withRateLimit(testLimiter, async () => {
+        results.push(n);
+        return n;
+      })
+    );
+
+    await Promise.all(promises);
+
+    // All should complete, but last 2 should wait for refill
+    expect(results).toEqual([1, 2, 3, 4]);
+  });
+
+  it('should limit concurrent requests', async () => {
+    let concurrent = 0;
+    let maxConcurrent = 0;
+
+    const fn = async () => {
+      concurrent++;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      concurrent--;
+      return true;
+    };
+
+    await Promise.all(
+      Array(20).fill(0).map(() => withRateLimit(spotLimiter, fn))
+    );
+
+    // spotLimiter has maxConcurrent: 10
+    expect(maxConcurrent).toBeLessThanOrEqual(10);
   });
 });
 ```
 
-**Run tests**:
-```bash
-# Setup vitest if not already done
-bun add -d vitest @vitest/ui
+**Run tests**: `bun test`
 
-# Add test script to package.json
-"test": "vitest",
-"test:ui": "vitest --ui"
+### Step 6: Add Monitoring & Logging (30 minutes)
 
-# Run tests
-bun test
+**File**: `lib/utils/rate-limiter.ts` (add monitoring function)
+
+```typescript
+/**
+ * Log rate limiter status for debugging
+ */
+export function logRateLimiterStatus() {
+  console.log('[RATE-LIMIT] Status:', {
+    spot: getRateLimiterStatus(spotLimiter),
+    futures: getRateLimiterStatus(futuresLimiter),
+    orders: getRateLimiterStatus(orderLimiter),
+  });
+}
+
+// Export for use in cron jobs
+setInterval(() => {
+  if (process.env.NODE_ENV === 'development') {
+    logRateLimiterStatus();
+  }
+}, 60000); // Log every minute in development
+```
+
+**Add to cron endpoints** (`app/api/cron/3-minutes-run-interval/route.ts`):
+```typescript
+import { logRateLimiterStatus } from '@/lib/utils/rate-limiter';
+
+// At end of cron job
+logRateLimiterStatus();
 ```
 
 ### Step 7: Integration Testing (30 minutes)
 
 **Manual Test Checklist**:
 
-1. **Test Exchange Retry** (simulate Binance timeout):
-   - Temporarily add long timeout to CCXT config
-   - Run trading cycle: `bun run cron:trading`
-   - Verify retry logs appear
-   - Verify eventual success or graceful failure
-
-2. **Test AI Retry** (simulate DeepSeek timeout):
-   - Temporarily set invalid API key
-   - Run trading cycle
-   - Verify retry does NOT happen (auth error = no retry)
-   - Restore key, verify success
-
-3. **Test Real Trading Cycle**:
+1. **Test Rate Limiting in Dry-Run Mode**:
    ```bash
-   bun dev
-   # Wait for 3-minute trading cycle
-   # Check logs for any errors
-   # Verify trades execute successfully
+   bun run cron:trading
+   # Should see "[RATE-LIMIT] Executing: ..." logs
+   # Verify no 429 errors
    ```
 
-4. **Test Error Scenarios**:
-   - Network disconnected: Should retry and log warnings
-   - Invalid API key: Should fail immediately (no retry)
-   - Rate limit: Should retry with backoff
+2. **Test Burst Protection**:
+   - Trigger multiple trading cycles rapidly
+   - Verify requests are queued, not rejected
+   - Check rate limiter status logs
+
+3. **Test Concurrent Limits**:
+   - Monitor concurrent request count
+   - Should never exceed configured limits
+
+4. **Test Reservoir Depletion**:
+   - Run continuous trading for 5 minutes
+   - Verify reservoir refills properly
+   - Check for queuing behavior
 
 ---
 
@@ -505,13 +419,11 @@ bun test
 ```
 lib/
 ├── utils/
-│   ├── retry.ts           ← CREATE (retry utility)
-│   └── retry.test.ts      ← CREATE (tests)
+│   ├── rate-limiter.ts         ← CREATE (rate limiter config)
+│   └── rate-limiter.test.ts    ← CREATE (tests)
 ├── trading/
-│   └── exchange-factory.ts   ← MODIFY (add withRetry wrapper)
-├── ai/
-│   └── run.ts             ← MODIFY (wrap generateObject)
-└── (update all files with CCXT calls)
+│   └── exchange-factory.ts     ← MODIFY (add limiter param to withRetry)
+└── (update all files with CCXT calls to use limiters)
 ```
 
 ---
@@ -520,31 +432,31 @@ lib/
 
 Your implementation is complete when:
 
-1. **All Tests Pass**:
-   ```bash
-   bun test
-   # All retry tests pass
-   ```
-
-2. **Retry Logs Visible**:
+1. **Zero Rate Limit Errors**:
    ```bash
    bun run cron:trading
-   # Logs show: "[RETRY] Attempt 1/3 failed. Retrying in 100ms..."
+   # No 429 errors in logs
    ```
 
-3. **Failed Trades Reduced**:
-   - Before: ~10-20% API failures (estimated)
-   - After: ~2-4% API failures (80% reduction)
+2. **Rate Limiter Tests Pass**:
+   ```bash
+   bun test
+   # All rate-limiter tests pass
+   ```
 
-4. **Graceful Degradation**:
-   - Transient errors retry automatically
-   - Persistent errors fail with clear messages
-   - No hanging requests (max delay enforced)
+3. **Graceful Degradation**:
+   - Requests queue when approaching limits
+   - No dropped requests
+   - Reservoir refills correctly
+
+4. **Monitoring Works**:
+   - Rate limiter status visible in logs
+   - Can see queued/running request counts
+   - Reservoir levels tracked
 
 5. **Performance Maintained**:
-   - Successful calls: No added latency
-   - Failed calls: Max 700ms total delay (100+200+400)
-   - AI calls: Max 10 seconds (reasonable for processing)
+   - Trading cycles complete within expected time
+   - No significant latency added for normal operations
 
 ---
 
@@ -552,19 +464,19 @@ Your implementation is complete when:
 
 ### ❌ DON'T Do These:
 
-1. **Don't retry on all errors** - Some errors are NOT retryable (auth, validation)
-2. **Don't use linear delays** - Exponential backoff prevents thundering herd
-3. **Don't retry forever** - Always have max retries limit
-4. **Don't ignore error context** - Log every retry for debugging
-5. **Don't retry client errors (4xx)** - These will never succeed
+1. **Don't use same limiter for all APIs** - Spot, futures, and orders have different limits
+2. **Don't set limits too high** - Leave safety margin (use 80% of actual limit)
+3. **Don't ignore weight values** - Some endpoints count as multiple requests
+4. **Don't disable rate limiting in production** - Always enforce limits
+5. **Don't forget to test reservoir refill** - Ensure limits reset properly
 
 ### ✅ DO These:
 
-1. **Test with real API failures** - Temporarily break things to verify retries work
-2. **Log all retry attempts** - Essential for debugging production issues
-3. **Use TypeScript generics** - `retryWithBackoff<T>` maintains type safety
-4. **Document retry behavior** - Future devs need to understand when retries happen
-5. **Make retry configurable** - Use env vars for flexibility
+1. **Use appropriate limiter for each API type** - Match limiter to endpoint
+2. **Set conservative limits** - Better to be slow than banned
+3. **Monitor reservoir levels** - Track when approaching limits
+4. **Test with burst traffic** - Ensure queueing works
+5. **Log rate limit events** - Essential for debugging
 
 ---
 
@@ -572,18 +484,16 @@ Your implementation is complete when:
 
 | Task | Time | Cumulative |
 |------|------|------------|
-| Install dependencies | 5 min | 5 min |
-| Create retry utility | 30 min | 35 min |
-| Wrap exchange calls | 45 min | 1h 20m |
-| Wrap AI calls | 30 min | 1h 50m |
-| Add configuration | 15 min | 2h 5m |
-| Write tests | 45 min | 2h 50m |
-| Integration testing | 30 min | 3h 20m |
-| Documentation update | 20 min | 3h 40m |
+| Create rate limiter utility | 30 min | 30 min |
+| Integrate with exchange factory | 45 min | 1h 15m |
+| Apply to all API calls | 1h | 2h 15m |
+| Add configuration | 15 min | 2h 30m |
+| Write tests | 45 min | 3h 15m |
+| Add monitoring/logging | 30 min | 3h 45m |
+| Integration testing | 30 min | 4h 15m |
+| Documentation update | 20 min | 4h 35m |
 
-**Total Estimated Time**: ~4 hours (half day)
-
-**Padding for Issues**: Add 2-4 hours for debugging (total ~1 day)
+**Total Estimated Time**: ~5 hours (half day with buffer)
 
 ---
 
@@ -592,71 +502,38 @@ Your implementation is complete when:
 ### 1. Update Documentation
 
 **Files to Update**:
-- `docs/CURRENT_STATUS.md` - Mark Task 1.2 complete, update status
-- `docs/ROADMAP.md` - Update Phase 1 progress to 2/6 (33%)
-- `SESSION_2025-11-03.md` - Rename to archive folder
+- `docs/CURRENT_STATUS.md` - Mark Task 1.3 complete, update Phase 1 to 4/6 (67%)
+- Create `docs/features/RATE_LIMITING.md` - Technical documentation
+- Archive this session: `SESSION_2025-11-03_RATE_LIMITING.md`
 
-**Add New Doc**:
-- `docs/features/ERROR_HANDLING.md` - Document retry logic, configuration, testing
+### 2. Prepare Next Session Brief
 
-### 2. Commit Changes
+**Next Task**: Task 1.4 - Expand Unit Tests
+- Complete wallet, validator, and account tests
+- Target 70%+ code coverage on critical paths
 
-```bash
-git add .
-git commit -m "feat: implement error handling with exponential backoff retry
+### 3. Test in Production-Like Conditions
 
-Adds automatic retry logic for all external API calls (CCXT and DeepSeek)
-to prevent transient failures from causing missed trades.
-
-Core Changes:
-- Create retry utility with exponential backoff (100ms, 200ms, 400ms)
-- Wrap all CCXT exchange calls with retry logic
-- Wrap DeepSeek AI calls with retry logic
-- Smart retry: only transient errors (5xx, network, timeouts)
-- Do NOT retry client errors (4xx, validation)
-
-Configuration:
-- MAX_RETRIES=3 (configurable via env)
-- INITIAL_RETRY_DELAY_MS=100
-- MAX_RETRY_DELAY_MS=5000
-
-Tests:
-- Unit tests for retry utility (bun test)
-- Integration tests with real API calls
-
-Impact:
-- Reduces failed trades by ~80%
-- Graceful degradation on API issues
-- Phase 1, Task 1.2 complete
-
-Test: bun test (all passing)"
-```
-
-### 3. Next Session Preview
-
-After completing this task, the next priority is:
-
-**Task 1.3: Rate Limiting** (1 day)
-- Use `bottleneck` (already installed) to enforce API limits
-- Prevent 429 rate limit errors from Binance
-- Essential for live trading
+Before live trading:
+- Run dry-run mode for 24 hours continuously
+- Monitor rate limiter logs for any issues
+- Verify zero 429 errors
+- Check reservoir behavior during peak usage
 
 ---
 
 ## 📚 REFERENCE DOCUMENTATION
 
 ### Must Read Before Starting:
-1. `docs/CURRENT_STATUS.md` - Current state (lines 1-50 for quick context)
-2. `docs/ROADMAP.md` - Task 1.2 details (lines 70-100)
+1. `docs/CURRENT_STATUS.md` - Current state (lines 230-244 for Phase 1 status)
+2. `docs/ROADMAP.md` - Task 1.3 details (lines 73-92)
+3. `docs/features/ERROR_HANDLING.md` - How retry works (integrate with this)
 
 ### Reference During Implementation:
-1. `lib/trading/exchange-factory.ts` - Current exchange code
-2. `lib/ai/run.ts` - Current AI call (line ~81)
-3. `docs/features/LIQUIDATION_PROTECTION.md` - Example of good docs
-
-### Testing References:
-1. `scripts/test-liquidation-protection.ts` - Example test structure
-2. Vitest docs: https://vitest.dev/
+1. [Bottleneck Documentation](https://github.com/SGrondin/bottleneck) - Rate limiter API
+2. [Binance API Rate Limits](https://binance-docs.github.io/apidocs/spot/en/#limits) - Official limits
+3. `lib/utils/retry.ts` - Existing retry implementation
+4. `lib/trading/exchange-factory.ts` - Current withRetry wrapper
 
 ---
 
@@ -664,28 +541,27 @@ After completing this task, the next priority is:
 
 Before ending the session, verify:
 
-- [ ] `lib/utils/retry.ts` created with full implementation
-- [ ] `lib/utils/retry.test.ts` created with 5+ test cases
-- [ ] All CCXT calls in 5+ files wrapped with `withRetry()`
-- [ ] DeepSeek `generateObject()` call wrapped with retry
+- [ ] `lib/utils/rate-limiter.ts` created with 3 limiters (spot, futures, orders)
+- [ ] `lib/utils/rate-limiter.test.ts` created with 5+ test cases
+- [ ] All CCXT calls in 4+ files use appropriate limiter
 - [ ] Environment variables added to `.env.example`
 - [ ] All tests passing (`bun test`)
 - [ ] Integration test completed (real trading cycle works)
+- [ ] Rate limiter status logging works
 - [ ] Documentation updated (`docs/CURRENT_STATUS.md`)
-- [ ] Changes committed with conventional commit message
 - [ ] Session summary created (optional but recommended)
 
 ---
 
 ## 💡 TIPS FOR SUCCESS
 
-1. **Start with the utility** - Get `retry.ts` working perfectly before wrapping calls
-2. **Test early, test often** - Write tests BEFORE wrapping all calls
-3. **Use search efficiently** - Find all CCXT calls: `grep -r "exchange\." lib/trading/`
-4. **One file at a time** - Don't rush, verify each wrapped call works
-5. **Read error messages** - If retry doesn't trigger, check `shouldRetry()` logic
-6. **Log everything** - Retry logs are your debugging friends
-7. **Break if stuck** - If blocked > 30 min, ask for clarification or pivot
+1. **Start with the utility** - Get `rate-limiter.ts` working perfectly before integrating
+2. **Test each limiter separately** - Verify spot, futures, and order limiters independently
+3. **Use appropriate limiter for each call** - Check which API the endpoint uses
+4. **Monitor logs closely** - Rate limiting should be visible in logs
+5. **Test reservoir exhaustion** - Simulate high-volume scenarios
+6. **Leave safety margin** - Use 80% of limits, not 100%
+7. **Read Bottleneck docs** - Understand reservoir, minTime, maxConcurrent
 
 ---
 
@@ -699,16 +575,16 @@ You have everything you need:
 - ✅ Timeline and file structure
 - ✅ Common pitfalls documented
 - ✅ Complete checklist
+- ✅ `bottleneck` already installed!
 
-**Expected Outcome**: By end of session, API failures reduced by 80%, system more resilient, Phase 1 progress at 33% (2/6 tasks).
+**Expected Outcome**: By end of session, zero rate limit violations, Phase 1 progress at 67% (4/6 tasks), system ready for continuous operation.
 
 **Start Command**:
 ```bash
 cd /mnt/c/Users/PC/Dev/open-nof1.ai
-bun add bottleneck
 mkdir -p lib/utils
-touch lib/utils/retry.ts lib/utils/retry.test.ts
-# Now implement retry.ts following Step 2 above
+touch lib/utils/rate-limiter.ts lib/utils/rate-limiter.test.ts
+# Now implement rate-limiter.ts following Step 1 above
 ```
 
 Good luck! 🎉

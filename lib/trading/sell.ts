@@ -1,4 +1,4 @@
-import { getSpotExchange, getSwapExchange } from "./exchange-factory";
+import { getSpotExchange, getSwapExchange, withRetry } from "./exchange-factory";
 import { isDryRunMode, dryRunWallet } from "./dry-run-wallet";
 
 export interface SellParams {
@@ -28,7 +28,10 @@ export async function sell(params: SellParams): Promise<{
     try {
       // Use Spot API for price in dry-run mode (no auth required)
       const exchange = isDryRunMode() ? getSpotExchange() : getSwapExchange();
-      const ticker = await exchange.fetchTicker(symbol);
+      const ticker = await withRetry(
+        () => exchange.fetchTicker(symbol),
+        `fetchTicker for sell order ${symbol}`
+      );
       executionPrice = ticker.last || 0;
     } catch (error) {
       return {
@@ -70,7 +73,10 @@ export async function sell(params: SellParams): Promise<{
       const binance = getSwapExchange();
 
       // Fetch current position
-      const positions = await binance.fetchPositions([symbol]);
+      const positions = await withRetry(
+        () => binance.fetchPositions([symbol]),
+        `fetchPositions for sell order ${symbol}`
+      );
       const position = positions.find((p) => p.symbol === symbol);
 
       if (!position || !position.contracts) {
@@ -84,7 +90,10 @@ export async function sell(params: SellParams): Promise<{
       const amount = (position.contracts * percentage) / 100;
 
       // Place market sell order for futures
-      const order = await binance.createMarketSellOrder(symbol, amount);
+      const order = await withRetry(
+        () => binance.createMarketSellOrder(symbol, amount),
+        `createMarketSellOrder for ${symbol}`
+      );
 
       console.log(`[LIVE] Executed sell order:`, order);
 

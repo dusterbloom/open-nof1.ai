@@ -1,5 +1,5 @@
 import { EMA, MACD, RSI, ATR } from "technicalindicators";
-import { getSpotExchange, getFuturesExchange, getSwapExchange } from "./exchange-factory";
+import { getSpotExchange, getFuturesExchange, getSwapExchange, withRetry } from "./exchange-factory";
 import { isDryRunMode } from "./dry-run-wallet";
 
 export interface MarketState {
@@ -113,19 +113,15 @@ export async function getCurrentMarketState(
     const exchange = isDryRunMode() ? getSpotExchange() : getSwapExchange();
 
     // Fetch 1-minute OHLCV data (last 100 candles for intraday analysis)
-    const ohlcv1m = await exchange.fetchOHLCV(
-      normalizedSymbol,
-      "1m",
-      undefined,
-      100
+    const ohlcv1m = await withRetry(
+      () => exchange.fetchOHLCV(normalizedSymbol, "1m", undefined, 100),
+      `fetchOHLCV 1m for ${normalizedSymbol}`
     );
 
     // Fetch 4-hour OHLCV data (last 100 candles for longer-term context)
-    const ohlcv4h = await exchange.fetchOHLCV(
-      normalizedSymbol,
-      "4h",
-      undefined,
-      100
+    const ohlcv4h = await withRetry(
+      () => exchange.fetchOHLCV(normalizedSymbol, "4h", undefined, 100),
+      `fetchOHLCV 4h for ${normalizedSymbol}`
     );
 
     // Extract price data from 1-minute candles
@@ -180,7 +176,10 @@ export async function getCurrentMarketState(
 
       // Fetch open interest (futures only)
       const perpSymbol = normalizedSymbol.replace("/", "");
-      const openInterest = await futuresExchange.fetchOpenInterest(perpSymbol);
+      const openInterest = await withRetry(
+        () => futuresExchange.fetchOpenInterest(perpSymbol),
+        `fetchOpenInterest for ${normalizedSymbol}`
+      );
 
       if (openInterest && typeof openInterest.openInterestAmount === "number") {
         openInterestData.latest = openInterest.openInterestAmount;
@@ -188,7 +187,10 @@ export async function getCurrentMarketState(
       }
 
       // Fetch funding rate (futures only)
-      const fundingRates = await futuresExchange.fetchFundingRate(normalizedSymbol);
+      const fundingRates = await withRetry(
+        () => futuresExchange.fetchFundingRate(normalizedSymbol),
+        `fetchFundingRate for ${normalizedSymbol}`
+      );
       if (fundingRates && typeof fundingRates.fundingRate === "number") {
         fundingRate = fundingRates.fundingRate;
       }

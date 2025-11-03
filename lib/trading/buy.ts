@@ -1,4 +1,4 @@
-import { getSpotExchange, getSwapExchange } from "./exchange-factory";
+import { getSpotExchange, getSwapExchange, withRetry } from "./exchange-factory";
 import { isDryRunMode, dryRunWallet } from "./dry-run-wallet";
 
 export interface BuyParams {
@@ -28,7 +28,10 @@ export async function buy(params: BuyParams): Promise<{
     try {
       // Use Spot API for price in dry-run mode (no auth required)
       const exchange = isDryRunMode() ? getSpotExchange() : getSwapExchange();
-      const ticker = await exchange.fetchTicker(symbol);
+      const ticker = await withRetry(
+        () => exchange.fetchTicker(symbol),
+        `fetchTicker for buy order ${symbol}`
+      );
       executionPrice = ticker.last || 0;
     } catch (error) {
       return {
@@ -68,12 +71,18 @@ export async function buy(params: BuyParams): Promise<{
       const amount = size / executionPrice;
 
       // Set leverage
-      await binance.setLeverage(leverage, symbol);
+      await withRetry(
+        () => binance.setLeverage(leverage, symbol),
+        `setLeverage for buy order ${symbol}`
+      );
 
       // Place market buy order for futures
-      const order = await binance.createMarketBuyOrder(symbol, amount, {
-        leverage,
-      });
+      const order = await withRetry(
+        () => binance.createMarketBuyOrder(symbol, amount, {
+          leverage,
+        }),
+        `createMarketBuyOrder for ${symbol}`
+      );
 
       console.log(`[LIVE] Executed buy order:`, order);
 

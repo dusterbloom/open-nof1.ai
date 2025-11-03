@@ -1,5 +1,5 @@
 import { Position } from "ccxt";
-import { getSpotExchange, getSwapExchange } from "./exchange-factory";
+import { getSpotExchange, getSwapExchange, withRetry } from "./exchange-factory";
 import { isDryRunMode, dryRunWallet } from "./dry-run-wallet";
 
 export interface AccountInformationAndPerformance {
@@ -26,7 +26,10 @@ async function getDryRunAccountInformation(
 
   try {
     const spotExchange = getSpotExchange();
-    const tickers = await spotExchange.fetchTickers(supportedSymbols);
+    const tickers = await withRetry(
+      () => spotExchange.fetchTickers(supportedSymbols),
+      "fetchTickers for dry-run account info"
+    );
 
     for (const symbol of supportedSymbols) {
       currentPrices[symbol] = tickers[symbol]?.last || 0;
@@ -127,20 +130,26 @@ async function getLiveAccountInformation(
   initialCapital: number
 ): Promise<AccountInformationAndPerformance> {
   const binance = getSwapExchange();
-  const positions = await binance.fetchPositions([
-    "BTC/USDT",
-    "ETH/USDT",
-    "SOL/USDT",
-    "BNB/USDT",
-    "DOGE/USDT",
-  ]);
+  const positions = await withRetry(
+    () => binance.fetchPositions([
+      "BTC/USDT",
+      "ETH/USDT",
+      "SOL/USDT",
+      "BNB/USDT",
+      "DOGE/USDT",
+    ]),
+    "fetchPositions for live account info"
+  );
   const currentPositionsValue = positions.reduce((acc, position) => {
     return acc + (position.initialMargin || 0) + (position.unrealizedPnl || 0);
   }, 0);
   const contractValue = positions.reduce((acc, position) => {
     return acc + (position.contracts || 0);
   }, 0);
-  const currentCashValue = await binance.fetchBalance({ type: "future" });
+  const currentCashValue = await withRetry(
+    () => binance.fetchBalance({ type: "future" }),
+    "fetchBalance for live account info"
+  );
   const totalCashValue = currentCashValue.USDT.total || 0;
   const availableCash = currentCashValue.USDT.free || 0;
   const currentTotalReturn = (totalCashValue - initialCapital) / initialCapital;

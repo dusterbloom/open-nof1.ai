@@ -137,3 +137,40 @@ export function resetExchangeInstances(): void {
   futuresInstance = null;
   swapInstance = null;
 }
+
+/**
+ * Wrapper for CCXT exchange methods with automatic retry logic
+ *
+ * Provides exponential backoff retry for transient errors (network, timeout, 5xx).
+ * Does NOT retry on client errors (4xx, validation).
+ *
+ * Usage:
+ *   const exchange = getSpotExchange();
+ *   const tickers = await withRetry(() => exchange.fetchTickers(symbols), "fetchTickers for market data");
+ *
+ * @param fn - The exchange API call to execute
+ * @param context - Optional context string for debugging logs
+ * @returns Promise with the result of the API call
+ */
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  context?: string
+): Promise<T> {
+  const { retryWithBackoff } = await import("@/lib/utils/retry");
+
+  return retryWithBackoff(fn, {
+    maxRetries: 3,
+    initialDelayMs: 100,
+    maxDelayMs: 5000,
+    shouldRetry: (error) => {
+      // Log context for debugging
+      if (context) {
+        console.warn(`[EXCHANGE RETRY] ${context}:`, error.message || error);
+      }
+
+      // Use default retry logic from retry.ts
+      // This will be handled by the isRetryableError function
+      return true;
+    },
+  });
+}

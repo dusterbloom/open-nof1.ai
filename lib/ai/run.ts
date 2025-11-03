@@ -14,6 +14,7 @@ import { randomUUID } from "crypto";
 import { isDryRunMode, dryRunWallet } from "../trading/dry-run-wallet";
 import { restoreDryRunWallet } from "../trading/restore-dry-run-wallet";
 import { collectMetrics } from "../metrics/collect-metrics";
+import { retryWithBackoff } from "../utils/retry";
 
 // Map of supported trading symbols
 const SUPPORTED_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"] as const;
@@ -144,61 +145,81 @@ Action: EMERGENCY FORCE-CLOSE
     invocationCount,
   });
 
-  const { object, reasoning } = await generateObject({
-    model: deepseek,
-    system: tradingPrompt,
-    prompt: userPrompt,
-    output: "object",
-    schemaName: "TradingDecision",
-    schemaDescription: "A structured trading decision with operation type, analysis, and optional buy/sell parameters",
-    schema: z.object({
-      operation: z.nativeEnum(operation),
-      symbol: z
-        .enum(["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"])
-        .optional()
-        .describe("The cryptocurrency symbol to trade (required for Buy/Sell operations, optional for Hold when no positions exist)."),
-      buy: z
-        .object({
-          pricing: z.number().describe("The pricing of you want to buy in."),
-          amount: z.number(),
-          leverage: z.number().min(1).max(20),
-          stopLoss: z.number().optional().describe("Optional stop loss price to protect the position"),
-          takeProfit: z.number().optional().describe("Optional take profit price to secure gains"),
-        })
-        .optional()
-        .describe("If operation is buy, generate object"),
-      sell: z
-        .object({
-          percentage: z
-            .number()
-            .min(0)
-            .max(100)
-            .describe("Percentage of position to sell"),
-        })
-        .optional()
-        .describe("If operation is sell, generate object"),
-      adjustProfit: z
-        .object({
-          stopLoss: z
-            .number()
-            .optional()
-            .describe("The stop loss of you want to set."),
-          takeProfit: z
-            .number()
-            .optional()
-            .describe("The take profit of you want to set."),
-        })
-        .optional()
-        .describe(
-          "If operation is hold and you want to adjust the profit, generate object"
-        ),
-      chat: z
-        .string()
-        .describe(
-          "The reason why you do this operation, and tell me your anlyaise, for example: Currently holding all my positions in ETH, SOL, XRP, BTC, DOGE, and BNB as none of my invalidation conditions have been triggered, though XRP and BNB are showing slight unrealized losses. My overall account is up 10.51% with $4927.64 in cash, so I'll continue to monitor my existing trades."
-        ),
+  const { object, reasoning } = await retryWithBackoff(
+    () => generateObject({
+      model: deepseek,
+      system: tradingPrompt,
+      prompt: userPrompt,
+      output: "object",
+      schemaName: "TradingDecision",
+      schemaDescription: "A structured trading decision with operation type, analysis, and optional buy/sell parameters",
+      schema: z.object({
+        operation: z.nativeEnum(operation),
+        symbol: z
+          .enum(["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"])
+          .optional()
+          .describe("The cryptocurrency symbol to trade (required for Buy/Sell operations, optional for Hold when no positions exist)."),
+        buy: z
+          .object({
+            pricing: z.number().describe("The pricing of you want to buy in."),
+            amount: z.number(),
+            leverage: z.number().min(1).max(20),
+            stopLoss: z.number().optional().describe("Optional stop loss price to protect the position"),
+            takeProfit: z.number().optional().describe("Optional take profit price to secure gains"),
+          })
+          .optional()
+          .describe("If operation is buy, generate object"),
+        sell: z
+          .object({
+            percentage: z
+              .number()
+              .min(0)
+              .max(100)
+              .describe("Percentage of position to sell"),
+          })
+          .optional()
+          .describe("If operation is sell, generate object"),
+        adjustProfit: z
+          .object({
+            stopLoss: z
+              .number()
+              .optional()
+              .describe("The stop loss of you want to set."),
+            takeProfit: z
+              .number()
+              .optional()
+              .describe("The take profit of you want to set."),
+          })
+          .optional()
+          .describe(
+            "If operation is hold and you want to adjust the profit, generate object"
+          ),
+        chat: z
+          .string()
+          .describe(
+            "The reason why you do this operation, and tell me your anlyaise, for example: Currently holding all my positions in ETH, SOL, XRP, BTC, DOGE, and BNB as none of my invalidation conditions have been triggered, though XRP and BNB are showing slight unrealized losses. My overall account is up 10.51% with $4927.64 in cash, so I'll continue to monitor my existing trades."
+          ),
+      }),
     }),
-  });
+    {
+      maxRetries: 3,
+      initialDelayMs: 200, // AI calls might be slower, start with 200ms
+      maxDelayMs: 10000,   // Max 10 seconds for AI
+      shouldRetry: (error) => {
+        console.warn(`[AI RETRY] DeepSeek API call failed:`, error.message || error);
+
+        // Don't retry on authentication or validation errors
+        if (error.message?.includes('invalid') ||
+            error.message?.includes('authentication') ||
+            error.message?.includes('API key')) {
+          return false;
+        }
+
+        // Retry on network errors and 5xx
+        return true;
+      },
+    }
+  );
 
   if (object.operation === operation.Buy && object.buy) {
     // Ensure symbol is present for Buy operations
