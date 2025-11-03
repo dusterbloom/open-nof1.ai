@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { MetricsChart } from "@/components/metrics-chart";
+import { LightweightChart } from "@/components/lightweight-chart";
 import { CryptoCard } from "@/components/crypto-card";
 import { ModelsView } from "@/components/models-view";
 import { Card } from "@/components/ui/card";
@@ -175,7 +175,7 @@ export default function Home() {
         <div className="flex flex-row gap-6">
           {/* Left: Chart */}
           <div className="flex-[2]">
-            <MetricsChart
+            <LightweightChart
               metricsData={metricsData}
               loading={loading}
               lastUpdate={lastUpdate}

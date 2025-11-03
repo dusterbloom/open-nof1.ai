@@ -5,15 +5,15 @@ import { MetricData } from "@/lib/types/metrics";
 
 /**
  * Intelligent downsampling based on time range
- * - ALL: 50 points (wide view)
- * - 72H: 100 points (3 days detail)
- * - 24H: 200 points (1 day high detail)
+ * - ALL: 1000 points (wide view with smooth curves)
+ * - 72H: 800 points (3 days detail)
+ * - 24H: 500 points (1 day high detail)
  * - 1H: No downsampling (maximum detail)
  */
 const SAMPLE_SIZE_BY_RANGE: Record<string, number> = {
-  ALL: 50,
-  "72H": 100,
-  "24H": 200,
+  ALL: 1000,
+  "72H": 800,
+  "24H": 500,
   "1H": 1000, // Effectively no downsampling for 1 hour
 };
 
@@ -81,7 +81,7 @@ export const GET = async (request: NextRequest) => {
 
     const databaseMetrics = metrics.metrics as unknown as {
       createdAt: string;
-      accountInformationAndPerformance: MetricData[];
+      accountInformationAndPerformance: MetricData;
       reason?: string;
       tradeId?: string;
     }[];

@@ -135,6 +135,12 @@ export async function run(initialCapital: number) {
   });
 
   if (object.operation === operation.Buy && object.buy) {
+    // Ensure symbol is present for Buy operations
+    if (!object.symbol) {
+      console.error("[TRADING] Buy operation requires a symbol");
+      return;
+    }
+
     // Validate buy order BEFORE execution
     const validation = validateBuyOrder({
       symbol: object.symbol,
@@ -192,30 +198,34 @@ export async function run(initialCapital: number) {
 
       // Set stop loss and take profit if provided by AI
       if (object.buy.stopLoss || object.buy.takeProfit) {
-        // Validate SL/TP levels before setting
-        const slTpValidation = validateStopLossTakeProfit({
-          stopLoss: object.buy.stopLoss,
-          takeProfit: object.buy.takeProfit,
-          entryPrice: buyResult.price,
-          side: "long", // BUY orders are always long positions
-        });
-
-        if (slTpValidation.valid) {
-          const slTpResult = await setStopLossTakeProfit({
-            symbol: object.symbol,
+        if (!buyResult.price) {
+          console.error("[TRADING] Cannot set SL/TP: Buy result has no price");
+        } else {
+          // Validate SL/TP levels before setting
+          const slTpValidation = validateStopLossTakeProfit({
             stopLoss: object.buy.stopLoss,
             takeProfit: object.buy.takeProfit,
-            positionSize: object.buy.amount / object.buy.leverage, // Contract size
-            side: "long",
+            entryPrice: buyResult.price,
+            side: "long", // BUY orders are always long positions
           });
 
-          if (!slTpResult.success) {
-            console.error(`[TRADING] Failed to set SL/TP: ${slTpResult.error}`);
+          if (slTpValidation.valid) {
+            const slTpResult = await setStopLossTakeProfit({
+              symbol: object.symbol,
+              stopLoss: object.buy.stopLoss,
+              takeProfit: object.buy.takeProfit,
+              positionSize: object.buy.amount / object.buy.leverage, // Contract size
+              side: "long",
+            });
+
+            if (!slTpResult.success) {
+              console.error(`[TRADING] Failed to set SL/TP: ${slTpResult.error}`);
+            } else {
+              console.log(`[TRADING] Stop loss/take profit set successfully`);
+            }
           } else {
-            console.log(`[TRADING] Stop loss/take profit set successfully`);
+            console.warn(`[TRADING] Invalid SL/TP levels: ${slTpValidation.errors.join(", ")}`);
           }
-        } else {
-          console.warn(`[TRADING] Invalid SL/TP levels: ${slTpValidation.errors.join(", ")}`);
         }
       }
 
@@ -278,6 +288,12 @@ export async function run(initialCapital: number) {
   }
 
   if (object.operation === operation.Sell && object.sell) {
+    // Ensure symbol is present for Sell operations
+    if (!object.symbol) {
+      console.error("[TRADING] Sell operation requires a symbol");
+      return;
+    }
+
     // Validate sell order BEFORE execution
     const validation = validateSellOrder({
       symbol: object.symbol,
@@ -314,7 +330,7 @@ export async function run(initialCapital: number) {
       return; // Exit without executing the trade
     }
 
-    // Find the open position's positionId for linking
+    // Find the open position's positionId for linking and get original trade data
     const openPosition = await prisma.trading.findFirst({
       where: {
         symbol: SYMBOL_TO_ENUM[object.symbol],
@@ -326,6 +342,8 @@ export async function run(initialCapital: number) {
       },
       select: {
         positionId: true,
+        amount: true,
+        leverage: true,
       },
     });
 
@@ -337,6 +355,11 @@ export async function run(initialCapital: number) {
 
     // Save to database ONLY after checking execution result
     if (sellResult.success) {
+      // Calculate actual amount sold based on percentage and original position
+      const amountSold = openPosition?.amount
+        ? (openPosition.amount * object.sell.percentage) / 100
+        : null;
+
       await prisma.chat.create({
         data: {
           reasoning: reasoning || "<no reasoning>",
@@ -348,6 +371,8 @@ export async function run(initialCapital: number) {
                 symbol: SYMBOL_TO_ENUM[object.symbol],
                 operation: object.operation,
                 pricing: sellResult.price,
+                amount: amountSold, // Store calculated amount sold
+                leverage: openPosition?.leverage || null, // Inherit leverage from Buy trade
                 positionId: openPosition?.positionId || null, // Link to the position
                 success: true,
                 errorMessage: null,
@@ -357,7 +382,7 @@ export async function run(initialCapital: number) {
         },
       });
       console.log(
-        `[TRADING] Sell order executed successfully at ${sellResult.price}, PnL: ${sellResult.pnl?.toFixed(2)} USDT`
+        `[TRADING] Sell order executed successfully at ${sellResult.price}, Amount: ${amountSold?.toFixed(4)} (${object.sell.percentage}% of position), Leverage: ${openPosition?.leverage}x, PnL: ${sellResult.pnl?.toFixed(2)} USDT`
       );
 
       // Collect metrics snapshot immediately after successful trade
@@ -370,6 +395,11 @@ export async function run(initialCapital: number) {
       // Trade execution failed - save with error details
       console.error(`[TRADING] Sell order failed: ${sellResult.error}`);
 
+      // Calculate intended amount to sell for the failed record
+      const amountSold = openPosition?.amount
+        ? (openPosition.amount * object.sell.percentage) / 100
+        : null;
+
       await prisma.chat.create({
         data: {
           reasoning: reasoning || "<no reasoning>",
@@ -380,6 +410,8 @@ export async function run(initialCapital: number) {
               data: {
                 symbol: SYMBOL_TO_ENUM[object.symbol],
                 operation: object.operation,
+                amount: amountSold, // Store calculated amount even for failed trades
+                leverage: openPosition?.leverage || null, // Inherit leverage from Buy trade
                 success: false,
                 errorMessage: sellResult.error,
               },
@@ -395,6 +427,12 @@ export async function run(initialCapital: number) {
       object.adjustProfit?.stopLoss || object.adjustProfit?.takeProfit;
 
     if (shouldAdjustProfit) {
+      // Ensure symbol is present for SL/TP adjustment
+      if (!object.symbol) {
+        console.error("[TRADING] Hold with SL/TP adjustment requires a symbol");
+        return;
+      }
+
       // Find the position for the symbol
       const position = accountInformationAndPerformance.positions.find(
         (p) => p.symbol === object.symbol && p.contracts !== 0

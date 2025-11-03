@@ -25,6 +25,19 @@ interface Trading {
   errorMessage?: string | null;
   positionId?: string | null;
   createdAt: string;
+  Chat?: {
+    model: string;
+    reasoning?: string;
+    chat?: string;
+  };
+}
+
+interface TradeData {
+  buy: Trading;
+  sell?: Trading;
+  pnl?: number;
+  pnlPercentage?: number;
+  status: "open" | "closed";
 }
 
 interface Chat {
@@ -55,7 +68,7 @@ interface Position {
 export function ModelsView() {
   const [activeTab, setActiveTab] = useState<TabType>("model-chat");
   const [chats, setChats] = useState<Chat[]>([]);
-  const [trades, setTrades] = useState<any[]>([]);
+  const [trades, setTrades] = useState<TradeData[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
   const [tradesLoading, setTradesLoading] = useState(true);
@@ -147,9 +160,9 @@ export function ModelsView() {
     return (
       <div className="space-y-3">
         <div className="text-xs text-muted-foreground mb-2">
-          {trades.length} trade{trades.length > 1 ? "s" : ""} ({trades.filter((t: any) => t.status === "closed").length} closed, {trades.filter((t: any) => t.status === "open").length} open)
+          {trades.length} trade{trades.length > 1 ? "s" : ""} ({trades.filter((t) => t.status === "closed").length} closed, {trades.filter((t) => t.status === "open").length} open)
         </div>
-        {trades.map((tradeData: any, idx: number) => {
+        {trades.map((tradeData, idx: number) => {
           const { buy, sell, pnl, pnlPercentage, status } = tradeData;
 
           if (!buy) {
@@ -175,9 +188,9 @@ export function ModelsView() {
                       {status === "closed" ? "CLOSED" : "OPEN"}
                     </span>
                   </div>
-                  {status === "closed" && pnl !== null && (
+                  {status === "closed" && pnl !== null && pnl !== undefined && (
                     <div className={`text-sm font-bold ${pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-                      {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} ({pnlPercentage >= 0 ? "+" : ""}{pnlPercentage?.toFixed(2)}%)
+                      {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} ({pnlPercentage !== undefined && pnlPercentage >= 0 ? "+" : ""}{pnlPercentage?.toFixed(2)}%)
                     </div>
                   )}
                 </div>
